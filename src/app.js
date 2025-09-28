@@ -9,7 +9,7 @@ app.use(express.json());
 
 // Routes
 app.use("/api/vendor", authRoutes);
-
+app.use("/api/branches", authRoutes);
 
 //Defualt route if not found
 app.use((req, res) => {

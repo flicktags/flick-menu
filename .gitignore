@@ -7,3 +7,4 @@
 # Ignore Firebase service account credentials
 src/config/firebaseServiceAccount.json
 node_modules/
+src/config/firebase.js
