@@ -4,7 +4,7 @@ import Vendor from "../models/Venndor.js";
 // util: generate sequential vendor ID
 let vendorCounter = 100100;
 const generateVendorId = () => `v${++vendorCounter}`;
-
+ 
 export const registerVendor = async (req, res) => {
   try {
     const { token, businessName, brandName, venueType, contactPhone, email, country, state, city, logoUrl, billing, features } = req.body;
