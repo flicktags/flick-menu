@@ -5,4 +5,6 @@ admin.initializeApp({
   credential: admin.credential.cert(process.env.FIREBASE_CONFIG ? JSON.parse(process.env.FIREBASE_CONFIG) : serviceAccount),
 });
 
+
 export default admin;
+ 
