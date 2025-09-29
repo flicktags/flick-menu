@@ -1,12 +1,15 @@
 import VenueTypeCounter from "../models/VenueTypeCounter.js";
 
 export const generateVenueTypeCode = async () => {
-  const counter = await VenueTypeCounter.findOneAndUpdate(
-    {},
-    { $inc: { seq: 1 } },
-    { new: true, upsert: true } // create if doesn't exist
-  );
+  let counter = await VenueTypeCounter.findOne();
+  
+  if (!counter) {
+    // Create initial counter if none exists
+    counter = await VenueTypeCounter.create({ seq: 100 });
+  } else {
+    counter.seq += 1;
+    await counter.save();
+  }
 
-  // Prefix "VT" + counter value
   return `VT${counter.seq}`;
 };
