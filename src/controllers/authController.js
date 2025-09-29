@@ -1,13 +1,23 @@
 import admin from "../config/firebase.js";
 import Vendor from "../models/Venndor.js";
+import { generateVendorId } from "../utils/generateVendorId.js";
 
-// util: generate sequential vendor ID
-let vendorCounter = 100100;
-const generateVendorId = () => `v${++vendorCounter}`;
- 
 export const registerVendor = async (req, res) => {
   try {
-    const { token, businessName, brandName, venueType, contactPhone, email, country, state, city, logoUrl, billing, features } = req.body;
+    const {
+      token,
+      businessName,
+      brandName,
+      venueType,
+      contactPhone,
+      email,
+      country,
+      state,
+      city,
+      logoUrl,
+      billing,
+      features,
+    } = req.body;
 
     if (!token) {
       return res.status(400).json({ message: "Firebase token required" });
@@ -20,13 +30,18 @@ export const registerVendor = async (req, res) => {
     // check if vendor already exists for this user
     const existingVendor = await Vendor.findOne({ userId });
     if (existingVendor) {
-      return res.status(200).json({ message: "Vendor already registered", vendor: existingVendor });
+      return res
+        .status(200)
+        .json({ message: "Vendor already registered", vendor: existingVendor });
     }
+
+    // generate sequential VendorID
+    const vendorId = await generateVendorId();
 
     // create new vendor
     const vendor = await Vendor.create({
       userId,
-      vendorId: generateVendorId(),
+      vendorId,
       businessName,
       brandName,
       venueType,
