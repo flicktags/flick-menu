@@ -43,18 +43,15 @@ export const registerVendor = async (req, res) => {
       userId,
       vendorId,
       businessName,
-      brandName,
-      venueType,
+      arabicbBusinessName,
+
       contactPhone,
       email,
       country,
-      state,
-      city,
       logoUrl,
       billing,
-      features,
-    });
-
+      ubdates,
+    })
     res.status(201).json({ message: "Vendor registered successfully", vendor });
   } catch (error) {
     console.error("Vendor Register Error:", error);
