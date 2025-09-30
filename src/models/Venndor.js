@@ -4,8 +4,8 @@ const vendorSchema = new mongoose.Schema(
   {
     userId: { type: String, required: true }, // Firebase UID (owner)
     vendorId: { type: String, unique: true, required: true }, // Sequential ID like v100101
-    businessName: { type: String, required: true },
-    arabicbBusinessName: { type: String, required: true },
+    businessName: { type: String, required: false },
+    arabicbBusinessName: { type: String, required: false },
     contactPhone: { type: String },
     email: { type: String },
 
