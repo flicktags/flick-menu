@@ -1,5 +1,5 @@
-import admin from "../config/firebase.js";
-import Vendor from "../models/Venndor.js";
+import admin from "../config/fireBase.js";
+import Vendor from "../models/Vendor.js";
 import { generateVendorId } from "../utils/generateVendorId.js";
 
 export const registerVendor = async (req, res) => {
@@ -14,7 +14,7 @@ export const registerVendor = async (req, res) => {
      
       logoUrl,
       billing,
-      updates,
+    
     } = req.body;
 
     if (!token) {
