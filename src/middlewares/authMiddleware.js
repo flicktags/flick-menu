@@ -17,6 +17,6 @@ export const verifyFirebaseToken = async (req, res, next) => {
     next();
   } catch (error) {
     console.error("Firebase Auth Error:", error);
-    return res.status(401).json({ error: "Unauthorized - Invalid token" });
+    return res.status(401).json({ error: "Unauthorized - Invalid token" }); // 
   }
 };

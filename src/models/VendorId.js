@@ -6,4 +6,4 @@ const counterSchema = new mongoose.Schema({
   seq: { type: Number, default: 100099 } // start just before first ID
 });
 
-export default mongoose.model("Counter", counterSchema);
+export default mongoose.model("Counter", counterSchema); //

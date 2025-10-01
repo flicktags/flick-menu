@@ -32,4 +32,4 @@ const branchSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
-export default mongoose.model("Branch", branchSchema);
+export default mongoose.model("Branch", branchSchema); //

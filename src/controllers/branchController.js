@@ -42,6 +42,6 @@ export const registerBranch = async (req, res) => {
     res.status(201).json({ message: "Branch registered successfully", branch });
   } catch (error) {
     console.error("Branch Register Error:", error);
-    res.status(500).json({ message: error.message });
+    res.status(500).json({ message: error.message }); //
   }
 };

@@ -12,7 +12,9 @@ app.use(express.json());
 // Routes
 app.use("/api/vendor", authRoutes);
 app.use("/api/branches", authRoutes);
-app.use("/api/lookups", lookupsApi);  // <-- register lookups routes
+app.use("/api/lookups", lookupsApi);  // <-- register lookups routes//
+
+
 
 
 //Defualt route if not found

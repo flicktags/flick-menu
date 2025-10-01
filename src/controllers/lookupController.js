@@ -3,7 +3,7 @@ import { generateVenueTypeCode } from "../utils/generateVenueTypeCode.js";
 
 // @desc Save a new VenueType lookup
 // @route POST /api/lookups/venue-types
-// @access Private (admin use ideally)
+// @access Private (admin use ideally) //
 export const createVenueType = async (req, res) => {
   try {
     const { nameEnglish, nameArabic } = req.body;

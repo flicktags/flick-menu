@@ -7,16 +7,14 @@ export const registerVendor = async (req, res) => {
     const {
       token,
       businessName,
-      brandName,
-      venueType,
+      arabicbBusinessName,
       contactPhone,
       email,
       country,
-      state,
-      city,
+     
       logoUrl,
       billing,
-      features,
+      updates,
     } = req.body;
 
     if (!token) {
@@ -43,18 +41,15 @@ export const registerVendor = async (req, res) => {
       userId,
       vendorId,
       businessName,
-      brandName,
-      venueType,
+      arabicbBusinessName,
+
       contactPhone,
       email,
       country,
-      state,
-      city,
       logoUrl,
       billing,
-      features,
-    });
-
+      updates,
+    })
     res.status(201).json({ message: "Vendor registered successfully", vendor });
   } catch (error) {
     console.error("Vendor Register Error:", error);
