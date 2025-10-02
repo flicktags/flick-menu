@@ -1,4 +1,4 @@
-import admin from "../config/fireBase.js";
+import admin from "../config/firebase.js";
 import Branch from "../models/Branch.js";
 import Vendor from "../models/Vendor.js";
 import { generateBranchId } from "../utils/generateBranchId.js";
