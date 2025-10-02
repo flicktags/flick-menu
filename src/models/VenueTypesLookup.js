@@ -16,4 +16,4 @@ const VenueTypesLookupSchema = new mongoose.Schema({
   }
 }, { timestamps: true });
 
-module.exports = mongoose.model('VenueTypesLookup', VenueTypesLookupSchema); /////
+module.exports = mongoose.model('VenueTypesLookup', VenueTypesLookupSchema); //
