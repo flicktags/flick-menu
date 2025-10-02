@@ -8,3 +8,5 @@
 src/config/firebaseServiceAccount.json
 node_modules/
 src/config/firebase.js
+src/models/Brannch.js
+src/models/Venndor.js

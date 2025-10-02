@@ -12,4 +12,4 @@ router.get("/venue-types", getVenueTypes);
 router.put("/venue-types/:id", updateVenueType);
 
 
-export default router; ///
+export default router; ////
