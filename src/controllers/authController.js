@@ -1,4 +1,4 @@
-import admin from "../config/fireBase.js";
+import admin from "../config/firebase.js";
 import Vendor from "../models/Vendor.js";
 import { generateVendorId } from "../utils/generateVendorId.js";
 
