@@ -11,5 +11,5 @@ export const generateVenueTypeCode = async () => {
     await counter.save();
   }
 
-  return `VT${counter.seq}`; ///
+  return `VT${counter.seq}`; ////
 };

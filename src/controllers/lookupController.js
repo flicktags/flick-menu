@@ -1,5 +1,5 @@
 import Lookup from "../models/Lookup.js"; //
-import { generateVenueTypeCode } from "../utils/generateVenueTypeCode.js"; //
+import { generateVenueTypeCode } from "../utils/generateVenueTypeCode.js"; ///
 
 // @desc Save a new VenueType lookup
 // @route POST /api/lookups/venue-types

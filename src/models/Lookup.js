@@ -14,4 +14,4 @@ const lookupSchema = new mongoose.Schema(
 // Index for faster lookup by type
 lookupSchema.index({ type: 1 });
 
-export default mongoose.model("Lookup", lookupSchema); //
+export default mongoose.model("Lookup", lookupSchema); ///
