@@ -21,7 +21,7 @@ const vendorSchema = new mongoose.Schema(
 
     updates: {
       createdDate: { type: Date, default: Date.now },
-      activatedDate: { type: Date, default: false },
+      activatedDate: { type: Date, default: null },
     },
   },
   { timestamps: true }
