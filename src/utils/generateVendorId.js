@@ -10,4 +10,4 @@ export const generateVendorId = async () => {
 
   // Ensure it’s always 8 digits with leading zeros if needed
   return `V${counter.seq.toString().padStart(6, "0")}`;
-};
+}; //

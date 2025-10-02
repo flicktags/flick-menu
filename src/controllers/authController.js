@@ -1,5 +1,5 @@
 import admin from "../config/firebase.js";
-import Vendor from "../models/Venndor.js";
+import Vendor from "../models/Vendor.js";
 import { generateVendorId } from "../utils/generateVendorId.js";
 
 export const registerVendor = async (req, res) => {
@@ -14,7 +14,7 @@ export const registerVendor = async (req, res) => {
      
       logoUrl,
       billing,
-      updates,
+    
     } = req.body;
 
     if (!token) {
@@ -47,8 +47,8 @@ export const registerVendor = async (req, res) => {
       email,
       country,
       logoUrl,
-      billing,
-      updates,
+      billing
+      
     })
     res.status(201).json({ message: "Vendor registered successfully", vendor });
   } catch (error) {

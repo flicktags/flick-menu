@@ -1,4 +1,4 @@
-import admin from "../config/firebase";
+import admin from "../config/firebase"; //
 
 export const verifyFirebaseToken = async (req, res, next) => {
   try {
