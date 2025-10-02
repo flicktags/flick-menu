@@ -1,4 +1,4 @@
-import Counter from "../models/VendorId.js ";
+import Counter from "../models/VendorId.js";
 
 export const generateBranchId = async () => {
   const counter = await Counter.findOneAndUpdate(
