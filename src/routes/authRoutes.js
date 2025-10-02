@@ -7,4 +7,4 @@ const router = express.Router();
 router.post("/register", registerVendor);
 router.post("/register", registerBranch);
 
-export default router; //
+export default router;
