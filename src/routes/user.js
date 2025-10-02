@@ -1,6 +1,6 @@
 // server/routes/user.js
 import { Router } from 'express';
-import { verifyFirebaseToken } from '../middleware/auth.js'; // <- the shim
+import { verifyFirebaseToken } from '../middlewares/authMiddleware.js'
 import Vendor from '../models/Vendor.js';
 
 const router = Router();
