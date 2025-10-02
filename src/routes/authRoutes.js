@@ -4,7 +4,7 @@ import { registerBranch } from "../controllers/branchController.js";
 const router = express.Router();
 
 // Register new user after Firebase login
-// router.post("/register", registerVendor);
+router.post("/register", registerVendor);
 router.post("/register", registerBranch);
 
 export default router;
