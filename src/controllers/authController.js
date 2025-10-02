@@ -49,9 +49,9 @@ export const registerVendor = async (req, res) => {
       logoUrl,
       billing,
       updates: {
-    createdDate: new Date(),
-    activatedDate: false
-  }
+  createdDate: { type: Date, default: Date.now },
+  activatedDate: { type: Date, default: Date.now },  // today by default
+},
     })
     res.status(201).json({ message: "Vendor registered successfully", vendor });
   } catch (error) {
