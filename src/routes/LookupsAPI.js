@@ -10,6 +10,10 @@ import {
   getAllergenById,
   getAllergenByKey,
   updateAllergen,
+  createFoodCategoryGroup,
+  getFoodCategoryGroups,
+  bulkCreateFoodCategories,
+  getFoodCategories,
 } from "../controllers/lookupController.js";
 // If you want to protect POST/PUT with Firebase auth in the future:
 // import { verifyFirebaseToken } from "../middleware/authMiddleware.js";
