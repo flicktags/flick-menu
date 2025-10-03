@@ -33,4 +33,11 @@ router.get("/allergens/by-key/:key", getAllergenByKey);
 router.post("/allergens", createAllergen);
 router.put("/allergens/:id", updateAllergen);
 
+router.post("/food-category-groups", createFoodCategoryGroup);
+router.get("/food-category-groups", getFoodCategoryGroups);
+
+// Categories
+router.post("/food-categories/bulk", bulkCreateFoodCategories);
+router.get("/food-categories", getFoodCategories);
+
 export default router;
