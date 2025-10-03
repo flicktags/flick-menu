@@ -4,6 +4,8 @@ import Allergen from "../models/Allergen.js"; // <— uses your separate model
 // controllers/lookupController.js (ADD THESE)
 import FoodCategoryGroup from "../models/FoodCategoryGroup.js";
 import FoodCategory from "../models/FoodCategory.js";
+import FoodTagGroup from "../models/FoodTagGroup.js";
+import FoodTag from "../models/FoodTag.js";
 
 import { generateVenueTypeCode } from "../utils/generateVenueTypeCode.js";
 
@@ -368,3 +370,127 @@ export const getFoodCategories = async (req, res) => {
     return res.status(500).json({ message: error.message });
   }
 };
+
+
+// @desc Create a food tag group
+// @route POST /api/lookups/food-tag-groups
+// @access Private (admin)
+export const createFoodTagGroup = async (req, res) => {
+  try {
+    const { code, name, nameArabic, order = 0, isActive } = req.body || {};
+    if (!name || !nameArabic) {
+      return res.status(400).json({ message: "name and nameArabic are required" });
+    }
+
+    const finalCode = (code && String(code).trim())
+      ? String(code).trim().toUpperCase()
+      : String(name).trim().toUpperCase().replace(/[^A-Z0-9]+/g, "_").slice(0, 24);
+
+    const exists = await FoodTagGroup.findOne({ code: finalCode }).lean();
+    if (exists) return res.status(409).json({ message: "Group code already exists", code: finalCode });
+
+    const group = await FoodTagGroup.create({
+      code: finalCode,
+      name,
+      nameArabic,
+      order,
+      isActive: isActive ?? true,
+    });
+
+    return res.status(201).json({ message: "Food tag group created", group });
+  } catch (error) {
+    console.error("Create FoodTagGroup Error:", error);
+    return res.status(500).json({ message: error.message });
+  }
+};
+
+// @desc List food tag groups
+// @route GET /api/lookups/food-tag-groups?activeOnly=true
+// @access Public
+export const getFoodTagGroups = async (req, res) => {
+  try {
+    const activeOnly = String(req.query.activeOnly ?? "true").toLowerCase() === "true";
+    const filter = activeOnly ? { isActive: true } : {};
+    const groups = await FoodTagGroup.find(filter).sort({ order: 1, name: 1 }).lean();
+    return res.status(200).json(groups);
+  } catch (error) {
+    console.error("Get FoodTagGroups Error:", error);
+    return res.status(500).json({ message: error.message });
+  }
+};
+
+// @desc Bulk create food tags (items reference a groupId)
+// @route POST /api/lookups/food-tags/bulk
+// @access Private (admin)
+export const bulkCreateFoodTags = async (req, res) => {
+  try {
+    const { items } = req.body || {};
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ message: "items[] is required" });
+    }
+
+    // Basic validation
+    for (const it of items) {
+      if (!it?.groupId || !it?.name || !it?.nameArabic) {
+        return res.status(400).json({
+          message: "Each item must include groupId, name, nameArabic",
+        });
+      }
+    }
+
+    // Prepare docs: normalize/generate code
+    const docs = await Promise.all(
+      items.map(async (it) => {
+        const code = (it.code && String(it.code).trim())
+          ? String(it.code).trim().toUpperCase()
+          : String(it.name).trim().toUpperCase().replace(/[^A-Z0-9]+/g, "_").slice(0, 40);
+
+        return {
+          groupId: it.groupId,
+          code,
+          name: it.name,
+          nameArabic: it.nameArabic,
+          order: it.order ?? 0,
+          isActive: it.isActive ?? true,
+        };
+      })
+    );
+
+    // Insert unordered so duplicates don't abort everything
+    const result = await FoodTag.insertMany(docs, { ordered: false });
+    return res.status(201).json({
+      message: "Food tags created",
+      createdCount: result.length,
+      created: result,
+    });
+  } catch (error) {
+    // Mongo bulk errors will still create partial docs; we can report what we can
+    console.error("Bulk Create FoodTags Error:", error);
+    return res.status(500).json({ message: error.message });
+  }
+};
+
+// @desc List food tags
+// @route GET /api/lookups/food-tags?groupId=&activeOnly=true&q=
+// @access Public
+export const getFoodTags = async (req, res) => {
+  try {
+    const { groupId, q } = req.query;
+    const activeOnly = String(req.query.activeOnly ?? "true").toLowerCase() === "true";
+
+    const filter = {};
+    if (groupId) filter.groupId = groupId;
+    if (activeOnly) filter.isActive = true;
+    if (q && q.trim()) {
+      const rx = new RegExp(q.trim(), "i");
+      filter.$or = [{ code: rx }, { name: rx }, { nameArabic: rx }];
+    }
+
+    const tags = await FoodTag.find(filter).sort({ order: 1, name: 1 }).lean();
+    return res.status(200).json(tags);
+  } catch (error) {
+    console.error("Get FoodTags Error:", error);
+    return res.status(500).json({ message: error.message });
+  }
+};
+
