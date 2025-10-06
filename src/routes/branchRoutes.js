@@ -1,6 +1,6 @@
 import express from "express";
 import { registerBranch, listBranchesByVendor } from "../controllers/branchController.js";
-import { verifyFirebaseToken } from "../middleware/authMiddleware.js";
+import { verifyFirebaseToken } from '../middlewares/authMiddleware.js'
 
 
 const branchRouter = express.Router();
