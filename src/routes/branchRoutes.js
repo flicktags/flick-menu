@@ -5,6 +5,9 @@ import { verifyFirebaseToken } from '../middlewares/authMiddleware.js'
 
 const branchRouter = express.Router();
 branchRouter.post("/register", registerBranch);
-router.get("/vendor/:vendorId", verifyFirebaseToken, listBranchesByVendor); // /api/branches/vendor/V000023
+// List branches (secured)
+branchRouter.get("/vendor/:vendorId", verifyFirebaseToken, listBranchesByVendor);
+// Also handy: GET /api/branches?vendorId=V000023
+branchRouter.get("/", verifyFirebaseToken, listBranchesByVendor);
 
 export default branchRouter;
