@@ -18,6 +18,12 @@ import {
   getFoodTagGroups,
   bulkCreateFoodTags,
   getFoodTags,
+
+    // ===== Menu Types =====
+  listMenuTypes,
+  createMenuType,
+  updateMenuType,
+  disableMenuType,
 } from "../controllers/lookupController.js";
 // If you want to protect POST/PUT with Firebase auth in the future:
 // import { verifyFirebaseToken } from "../middleware/authMiddleware.js";
@@ -28,6 +34,13 @@ const router = express.Router();
 router.post("/venue-types", createVenueType);
 router.get("/venue-types", getVenueTypes);
 router.put("/venue-types/:id", updateVenueType);
+
+// Public-style endpoints (no auth)
+router.get("/menu-types", listMenuTypes);             // ?active=true to return only active
+router.post("/menu-types", createMenuType);           // body: { key, nameEnglish, nameArabic?, sortOrder?, isActive? }
+router.put("/menu-types/:id", updateMenuType);        // partial updates allowed (key will be normalized)
+router.delete("/menu-types/:id", disableMenuType);    // soft-disable (sets isActive:false)
+
 
 /* ===== Allergens ===== */
 // Public GETs

@@ -6,6 +6,8 @@ import FoodCategoryGroup from "../models/FoodCategoryGroup.js";
 import FoodCategory from "../models/FoodCategory.js";
 import FoodTagGroup from "../models/FoodTagGroup.js";
 import FoodTag from "../models/FoodTag.js";
+import MenuType from "../models/MenuType.js"
+
 
 import { generateVenueTypeCode } from "../utils/generateVenueTypeCode.js";
 
@@ -494,3 +496,66 @@ export const getFoodTags = async (req, res) => {
   }
 };
 
+
+export const listMenuTypes = async (req, res) => {
+  try {
+    const onlyActive = req.query.active === "true";
+    const q = onlyActive ? { isActive: true } : {};
+    const types = await MenuType.find(q)
+      .sort({ sortOrder: 1, nameEnglish: 1 })
+      .select("key nameEnglish nameArabic sortOrder isActive");
+    res.json(types);
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+};
+
+export const createMenuType = async (req, res) => {
+  try {
+    let { key, nameEnglish, nameArabic, sortOrder, isActive } = req.body;
+    if (!key || !nameEnglish) {
+      return res.status(400).json({ message: "key and nameEnglish are required" });
+    }
+    key = String(key).toUpperCase().replace(/\s+/g, "_");
+
+    const created = await MenuType.create({
+      key,
+      nameEnglish,
+      nameArabic,
+      sortOrder,
+      isActive,
+    });
+    res.status(201).json({ message: "Menu type created", menuType: created });
+  } catch (e) {
+    if (e.code === 11000) {
+      return res.status(409).json({ message: "key already exists" });
+    }
+    res.status(500).json({ message: e.message });
+  }
+};
+
+export const updateMenuType = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const updates = { ...req.body };
+    if (updates.key) {
+      updates.key = String(updates.key).toUpperCase().replace(/\s+/g, "_");
+    }
+    const mt = await MenuType.findByIdAndUpdate(id, updates, { new: true });
+    if (!mt) return res.status(404).json({ message: "Not found" });
+    res.json({ message: "Updated", menuType: mt });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+};
+
+export const disableMenuType = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const mt = await MenuType.findByIdAndUpdate(id, { isActive: false }, { new: true });
+    if (!mt) return res.status(404).json({ message: "Not found" });
+    res.json({ message: "Disabled", menuType: mt });
+  } catch (e) {
+    res.status(500).json({ message: e.message });
+  }
+};
