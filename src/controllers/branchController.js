@@ -1,6 +1,7 @@
 import admin from "../config/firebase.js";
 import Branch from "../models/Branch.js";
 import Vendor from "../models/Vendor.js";
+import MenuType from "../models/MenuType.js"; // for default names on enable
 import { generateBranchId } from "../utils/generateBranchId.js";
 
 export const registerBranch = async (req, res) => {
@@ -123,5 +124,160 @@ export const listBranchesByVendor = async (req, res) => {
   } catch (err) {
     console.error("List branches error:", err);
     return res.status(500).json({ message: err.message });
+  }
+};
+
+const loadBranchByPublicId = async (branchId) => {
+  const branch = await Branch.findOne({ branchId }).lean(false); // lean(false) => real doc for save()
+  return branch;
+};
+
+const ensureCanManageBranch = async (req, branch) => {
+  // Allow branch owner or vendor owner
+  const uid = req.user?.uid;
+  if (!uid || !branch) return false;
+
+  if (branch.userId === uid) return true;
+
+  const vendor = await Vendor.findOne({ vendorId: branch.vendorId }).lean();
+  if (vendor && vendor.userId === uid) return true;
+
+  // (Optional) allow admin claim:
+  // if (req.user?.admin === true) return true;
+
+  return false;
+};
+
+// ---------- GET /api/branches/:branchId/menu/sections ----------
+export const getBranchMenuSections = async (req, res) => {
+  try {
+    const { branchId } = req.params;
+
+    const branch = await loadBranchByPublicId(branchId);
+    if (!branch) return res.status(404).json({ message: "Branch not found" });
+
+    if (!(await ensureCanManageBranch(req, branch))) {
+      return res.status(403).json({ message: "Forbidden" });
+    }
+
+    const sections = [...(branch.menuSections || [])].sort(
+      (a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.nameEnglish.localeCompare(b.nameEnglish)
+    );
+
+    return res.status(200).json({
+      branchId: branch.branchId,
+      vendorId: branch.vendorId,
+      sections,
+    });
+  } catch (e) {
+    console.error("getBranchMenuSections error:", e);
+    return res.status(500).json({ message: e.message });
+  }
+};
+
+// ---------- POST /api/branches/:branchId/menu/sections ----------
+export const upsertBranchMenuSection = async (req, res) => {
+  try {
+    const { branchId } = req.params;
+    let { key, nameEnglish, nameArabic, sortOrder } = req.body || {};
+    if (!key) return res.status(400).json({ message: "key is required" });
+
+    key = String(key).toUpperCase().trim();
+
+    const branch = await loadBranchByPublicId(branchId);
+    if (!branch) return res.status(404).json({ message: "Branch not found" });
+
+    if (!(await ensureCanManageBranch(req, branch))) {
+      return res.status(403).json({ message: "Forbidden" });
+    }
+
+    // Default labels from MenuType if missing
+    if (!nameEnglish || !nameArabic) {
+      const mt = await MenuType.findOne({ key }).lean();
+      if (!mt && !nameEnglish) {
+        return res.status(400).json({ message: "Unknown key and nameEnglish is missing" });
+      }
+      nameEnglish = nameEnglish ?? mt?.nameEnglish ?? key;
+      nameArabic = nameArabic ?? mt?.nameArabic ?? "";
+      if (sortOrder === undefined && mt?.sortOrder !== undefined) {
+        sortOrder = mt.sortOrder;
+      }
+    }
+
+    const list = branch.menuSections ?? [];
+    const i = list.findIndex((s) => s.key === key);
+
+    let created = false;
+    if (i >= 0) {
+      // update existing
+      list[i].isEnabled = true;
+      if (nameEnglish !== undefined) list[i].nameEnglish = nameEnglish;
+      if (nameArabic !== undefined) list[i].nameArabic = nameArabic;
+      if (sortOrder !== undefined) list[i].sortOrder = Number(sortOrder) || 0;
+    } else {
+      // push new
+      list.push({
+        key,
+        nameEnglish,
+        nameArabic: nameArabic ?? "",
+        sortOrder: Number(sortOrder) || 0,
+        isEnabled: true,
+        itemCount: 0,
+      });
+      created = true;
+    }
+
+    branch.menuSections = list;
+    await branch.save();
+
+    const section = branch.menuSections.find((s) => s.key === key);
+    return res
+      .status(created ? 201 : 200)
+      .json({
+        message: created ? "Menu section enabled" : "Menu section updated",
+        branchId: branch.branchId,
+        section,
+      });
+  } catch (e) {
+    console.error("upsertBranchMenuSection error:", e);
+    return res.status(500).json({ message: e.message });
+  }
+};
+
+// ---------- DELETE /api/branches/:branchId/menu/sections/:key?hard=true ----------
+export const disableOrRemoveBranchMenuSection = async (req, res) => {
+  try {
+    const { branchId, key: rawKey } = req.params;
+    const hard = String(req.query.hard ?? "false").toLowerCase() === "true";
+    const key = String(rawKey).toUpperCase().trim();
+
+    const branch = await loadBranchByPublicId(branchId);
+    if (!branch) return res.status(404).json({ message: "Branch not found" });
+
+    if (!(await ensureCanManageBranch(req, branch))) {
+      return res.status(403).json({ message: "Forbidden" });
+    }
+
+    const list = branch.menuSections ?? [];
+    const i = list.findIndex((s) => s.key === key);
+    if (i < 0) return res.status(404).json({ message: "Section not found" });
+
+    if (hard) {
+      list.splice(i, 1);
+    } else {
+      list[i].isEnabled = false;
+    }
+
+    branch.menuSections = list;
+    await branch.save();
+
+    return res.status(200).json({
+      message: hard ? "Menu section removed" : "Menu section disabled",
+      branchId: branch.branchId,
+      key,
+    });
+  } catch (e) {
+    console.error("disableOrRemoveBranchMenuSection error:", e);
+    return res.status(500).json({ message: e.message });
   }
 };

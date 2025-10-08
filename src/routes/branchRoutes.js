@@ -1,5 +1,7 @@
 import express from "express";
-import { registerBranch, listBranchesByVendor } from "../controllers/branchController.js";
+import { registerBranch, listBranchesByVendor, getBranchMenuSections,
+  upsertBranchMenuSection,
+  disableOrRemoveBranchMenuSection, } from "../controllers/branchController.js";
 import { verifyFirebaseToken } from '../middlewares/authMiddleware.js'
 
 
@@ -9,5 +11,11 @@ branchRouter.post("/register", registerBranch);
 branchRouter.get("/vendor/:vendorId", verifyFirebaseToken, listBranchesByVendor);
 // Also handy: GET /api/branches?vendorId=V000023
 branchRouter.get("/", verifyFirebaseToken, listBranchesByVendor);
+
+// Menu sections per-branch
+branchRouter.get("/:branchId/menu/sections", verifyFirebaseToken, getBranchMenuSections);
+branchRouter.post("/:branchId/menu/sections", verifyFirebaseToken, upsertBranchMenuSection);
+branchRouter.delete("/:branchId/menu/sections/:key", verifyFirebaseToken, disableOrRemoveBranchMenuSection);
+
 
 export default branchRouter;
