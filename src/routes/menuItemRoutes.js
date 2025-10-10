@@ -5,8 +5,8 @@ import {
   listMenuItems,
   getMenuItem,
   updateMenuItem,
-  deleteMenuItem,
-  setAvailability,
+  deleteMenuItem
+//   setAvailability,
 } from "../controllers/menuItemController.js";
 
 const router = express.Router();
@@ -27,7 +27,7 @@ router.get("/items/:id", getMenuItem);
 router.patch("/items/:id", updateMenuItem);
 
 // Quick availability toggle
-router.patch("/items/:id/availability", setAvailability);
+// router.patch("/items/:id/availability", setAvailability);
 
 // Delete
 router.delete("/items/:id", deleteMenuItem);
