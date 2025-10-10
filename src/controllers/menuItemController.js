@@ -1,5 +1,6 @@
 import Branch from "../models/Branch.js";
 import Vendor from "../models/Vendor.js";
+import MenuItem from "../models/MenuItem.js"
 
 /* ---------- helpers (same spirit as your branch controller) ---------- */
 
