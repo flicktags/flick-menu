@@ -5,6 +5,8 @@ import vendorRoutes from "./routes/vendorRoutes.js";
 import branchRoutes from "./routes/branchRoutes.js";   
 import lookupsApi from "./routes/LookupsAPI.js";
 import userRouter from "./routes/user.js"
+import menuItemRoutes from "./routes/menuItemRoutes.js";
+
 const app = express();
 
 // Middlewares
@@ -18,6 +20,8 @@ app.use("/api/vendor", vendorRoutes);
 app.use("/api/branches", branchRoutes);
 app.use("/api/lookups", lookupsApi);
 app.use('/api/user', userRouter);
+app.use("/api/menu", menuItemRoutes);
+
 
 
 //Defualt route if not found
