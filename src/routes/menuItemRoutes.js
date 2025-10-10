@@ -1,37 +1,43 @@
+// routes/menuItemRoutes.js
 import express from "express";
 import { verifyFirebaseToken } from "../middlewares/authMiddleware.js";
 import {
   createMenuItem,
   listMenuItems,
-  getMenuItemById,
+  getMenuItem,
   updateMenuItem,
   deleteMenuItem,
 } from "../controllers/menuItemController.js";
 
-const menuItemRouter = express.Router();
+const router = express.Router();
 
-// Create in a specific branch/section
-menuItemRouter.post(
-  "/branches/:branchId/sections/:sectionKey/items",
-  verifyFirebaseToken,
-  createMenuItem
-);
+// All endpoints require Firebase auth
+router.use(verifyFirebaseToken);
 
-// List (by branch and/or section) — supports ?page=&limit=&isActive=
-menuItemRouter.get(
-  "/branches/:branchId/sections/:sectionKey/items",
-  verifyFirebaseToken,
-  listMenuItems
-);
-menuItemRouter.get(
-  "/branches/:branchId/items",
-  verifyFirebaseToken,
-  listMenuItems
-);
+/**
+ * Base path should be mounted as:
+ *   app.use("/api/menu-items", router);
+ * So final URLs:
+ *   POST   /api/menu-items           (create; branchId + sectionKey in BODY)
+ *   GET    /api/menu-items           (list; ?branchId=...&sectionKey=...&isActive=true)
+ *   GET    /api/menu-items/:id       (read one)
+ *   PATCH  /api/menu-items/:id       (update)
+ *   DELETE /api/menu-items/:id       (delete)
+ */
 
-// Single item CRUD
-menuItemRouter.get("/items/:id", verifyFirebaseToken, getMenuItemById);
-menuItemRouter.patch("/items/:id", verifyFirebaseToken, updateMenuItem);
-menuItemRouter.delete("/items/:id", verifyFirebaseToken, deleteMenuItem);
+// Create (BODY must include branchId + sectionKey)
+router.post("/", createMenuItem);
 
-export default menuItemRouter;
+// List (branchId required in query; sectionKey/isActive optional)
+router.get("/", listMenuItems);
+
+// Read one
+router.get("/:id", getMenuItem);
+
+// Update
+router.patch("/:id", updateMenuItem);
+
+// Delete
+router.delete("/:id", deleteMenuItem);
+
+export default router;

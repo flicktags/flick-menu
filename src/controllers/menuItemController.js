@@ -80,7 +80,11 @@ function validateBusinessRules(payload) {
 
 async function refreshSectionActiveCount(branch, sectionKey) {
   try {
-    const activeCount = await MenuItem.countDocuments({ branchId: branch.branchId, sectionKey, isActive: true });
+    const activeCount = await MenuItem.countDocuments({
+      branchId: branch.branchId,
+      sectionKey,
+      isActive: true
+    });
     const i = (branch.menuSections || []).findIndex((s) => s.key === sectionKey);
     if (i >= 0) {
       branch.menuSections[i].itemCount = activeCount;
@@ -91,13 +95,12 @@ async function refreshSectionActiveCount(branch, sectionKey) {
   }
 }
 
-// ---------------- CREATE ----------------
+// ---------------- CREATE (body-based) ----------------
 export const createMenuItem = async (req, res) => {
   try {
-    const branchIdParam = req.params.branchId || req.body.branchId;
-    const sectionParam  = req.params.sectionKey || req.body.sectionKey;
-    const branchId = String(branchIdParam || "").trim();
-    const sectionKey = toUpper(sectionParam);
+    // Body-based identifiers (no URL params)
+    const branchId = String(req.body.branchId || "").trim();
+    const sectionKey = toUpper(req.body.sectionKey || "");
 
     if (!branchId)  return res.status(400).json({ code: "BRANCH_ID_REQUIRED", message: "branchId is required" });
     if (!sectionKey) return res.status(400).json({ code: "SECTION_KEY_REQUIRED", message: "sectionKey is required" });
@@ -108,6 +111,15 @@ export const createMenuItem = async (req, res) => {
       return res.status(403).json({ code: "FORBIDDEN", message: "You do not own this branch" });
     }
 
+    // Optional: if client sends vendorId, enforce match
+    if (req.body.vendorId && String(req.body.vendorId) !== branch.vendorId) {
+      return res.status(400).json({
+        code: "VENDOR_MISMATCH",
+        message: "vendorId in body does not match branch.vendorId"
+      });
+    }
+
+    // Section must exist & be enabled
     const sec = (branch.menuSections || []).find((s) => s.key === sectionKey);
     if (!sec || sec.isEnabled !== true) {
       return res.status(400).json({
@@ -174,15 +186,15 @@ export const createMenuItem = async (req, res) => {
 // ---------------- LIST (with filters) ----------------
 export const listMenuItems = async (req, res) => {
   try {
-    const branchId = String(req.query.branchId || req.params.branchId || "").trim();
-    const sectionKey = toUpper(req.query.sectionKey || req.params.sectionKey || "");
+    // Prefer query for GET; fallback to body if someone calls with POST in future.
+    const branchId = String(req.query.branchId ?? req.body?.branchId ?? "").trim();
+    const sectionKey = toUpper(req.query.sectionKey ?? req.body?.sectionKey ?? "");
     const isActive = req.query.isActive;
 
     if (!branchId) return res.status(400).json({ code: "BRANCH_ID_REQUIRED", message: "branchId is required" });
 
     const branch = await Branch.findOne({ branchId }).lean();
     if (!branch) return res.status(404).json({ code: "BRANCH_NOT_FOUND", message: "Branch not found" });
-
     if (!(await userOwnsBranch(req, branch))) {
       return res.status(403).json({ code: "FORBIDDEN", message: "You do not own this branch" });
     }
@@ -217,7 +229,7 @@ export const listMenuItems = async (req, res) => {
 };
 
 // ---------------- GET ONE ----------------
-export const getMenuItemById = async (req, res) => {
+export const getMenuItem = async (req, res) => {
   try {
     const id = req.params.id;
     const item = await MenuItem.findById(id).lean();
@@ -232,7 +244,7 @@ export const getMenuItemById = async (req, res) => {
 
     return res.json({ item });
   } catch (err) {
-    console.error("getMenuItemById error:", err);
+    console.error("getMenuItem error:", err);
     return res.status(500).json({ code: "SERVER_ERROR", message: err.message });
   }
 };
@@ -305,12 +317,14 @@ export const updateMenuItem = async (req, res) => {
     }
 
     const prevSection = item.sectionKey;
+    const prevActive  = item.isActive;
+
     Object.assign(item, next);
     await item.save();
 
     // refresh counts if section changed or active flag changed
     await refreshSectionActiveCount(branch, prevSection);
-    if (newSectionKey !== prevSection) {
+    if (newSectionKey !== prevSection || prevActive !== item.isActive) {
       await refreshSectionActiveCount(branch, newSectionKey);
     }
 
