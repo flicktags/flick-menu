@@ -1,315 +1,192 @@
+// controllers/menuItemController.js
+import MenuItem from "../models/MenuItem.js";
 import Branch from "../models/Branch.js";
 import Vendor from "../models/Vendor.js";
-import MenuItem from "../models/MenuItem.js"
 
-/* ---------- helpers (same spirit as your branch controller) ---------- */
+// --- helpers ---------------------------------------------------------
+const toUpper = (v) => (typeof v === "string" ? v.toUpperCase().trim() : "");
+const isNonEmptyString = (v) => typeof v === "string" && v.trim().length > 0;
+const isPositive = (n) => typeof n === "number" && n > 0;
 
-const loadBranchByPublicId = async (branchId) => {
-  return Branch.findOne({ branchId }).lean(); // read-only is fine here
-};
+function validateBusinessRules(payload) {
+  const errs = [];
 
-const ensureCanManageBranch = async (uid, branch) => {
-  if (!uid || !branch) return false;
+  // Names
+  if (!isNonEmptyString(payload.nameEnglish)) errs.push("nameEnglish is required");
+  if (!isNonEmptyString(payload.nameArabic)) errs.push("nameArabic is required");
+
+  // Price model
+  if (payload.isSizedBased === true) {
+    if (!Array.isArray(payload.sizes) || payload.sizes.length === 0) {
+      errs.push("sizes must be a non-empty array when isSizedBased=true");
+    } else {
+      for (const s of payload.sizes) {
+        if (!isNonEmptyString(s.label)) errs.push("each size.label is required");
+        if (!isPositive(Number(s.price))) errs.push("each size.price must be > 0");
+      }
+    }
+    // When sized-based, fixedPrice should be 0 or omitted
+    if (payload.fixedPrice && Number(payload.fixedPrice) > 0) {
+      errs.push("fixedPrice must be 0 when isSizedBased=true");
+    }
+  } else {
+    // Fixed price mode
+    if (!isPositive(Number(payload.fixedPrice))) {
+      errs.push("fixedPrice must be > 0 when isSizedBased=false");
+    }
+    // Offered price (if present) must be <= fixedPrice
+    if (payload.offeredPrice != null) {
+      const op = Number(payload.offeredPrice);
+      if (isNaN(op) || op < 0) errs.push("offeredPrice must be >= 0");
+      if (isPositive(Number(payload.fixedPrice)) && op > Number(payload.fixedPrice)) {
+        errs.push("offeredPrice cannot be greater than fixedPrice");
+      }
+    }
+  }
+
+  // Discount
+  if (payload.discount) {
+    const { type, value, validUntil } = payload.discount;
+    if (type && !["percentage", "amount"].includes(type)) {
+      errs.push("discount.type must be 'percentage' or 'amount'");
+    }
+    if (value != null) {
+      const v = Number(value);
+      if (isNaN(v) || v <= 0) errs.push("discount.value must be > 0");
+      if (type === "percentage" && v > 100) {
+        errs.push("discount.value cannot exceed 100 when type=percentage");
+      }
+    }
+    if (validUntil) {
+      const d = new Date(validUntil);
+      if (isNaN(d.getTime())) errs.push("discount.validUntil must be a valid ISO date");
+    }
+  }
+
+  // Optional numerics
+  if (payload.calories != null) {
+    const cals = Number(payload.calories);
+    if (isNaN(cals) || cals < 0) errs.push("calories must be >= 0");
+  }
+  if (payload.preparationTimeInMinutes != null) {
+    const mins = Number(payload.preparationTimeInMinutes);
+    if (isNaN(mins) || mins < 0) errs.push("preparationTimeInMinutes must be >= 0");
+  }
+
+  return errs;
+}
+
+async function userOwnsBranch(req, branch) {
+  const uid = req.user?.uid;
+  if (!uid) return false;
+  if (!branch) return false;
   if (branch.userId === uid) return true;
   const vendor = await Vendor.findOne({ vendorId: branch.vendorId }).lean();
   if (vendor && vendor.userId === uid) return true;
-  // (optional) admin claim
+  // Optionally: allow admin claim here
   return false;
-};
+}
 
-const bumpSectionCount = async (branchId, sectionKey, delta) => {
-  // increment/decrement itemCount on the section (if present)
-  await Branch.updateOne(
-    { branchId, "menuSections.key": sectionKey },
-    { $inc: { "menuSections.$.itemCount": delta } }
-  ).catch(() => {});
-};
-
-/* ---------- CREATE: POST /api/menu/items ---------- */
+// --- controller: CREATE ------------------------------------------------
 export const createMenuItem = async (req, res) => {
   try {
-    const uid = req.user?.uid;
-    const {
+    // 1) Resolve identifiers
+    const branchIdParam = req.params.branchId || req.body.branchId;
+    const sectionParam  = req.params.sectionKey || req.body.sectionKey;
+    const branchId = String(branchIdParam || "").trim();
+    const sectionKey = toUpper(sectionParam);
+
+    if (!branchId) {
+      return res.status(400).json({ code: "BRANCH_ID_REQUIRED", message: "branchId is required" });
+    }
+    if (!sectionKey) {
+      return res.status(400).json({ code: "SECTION_KEY_REQUIRED", message: "sectionKey is required" });
+    }
+
+    // 2) Load branch + ownership
+    const branch = await Branch.findOne({ branchId }).lean(false); // real doc if we later want to update counts
+    if (!branch) return res.status(404).json({ code: "BRANCH_NOT_FOUND", message: "Branch not found" });
+
+    if (!(await userOwnsBranch(req, branch))) {
+      return res.status(403).json({ code: "FORBIDDEN", message: "You do not own this branch" });
+    }
+
+    // 3) **Validate section exists & is enabled**
+    const sec = (branch.menuSections || []).find((s) => s.key === sectionKey);
+    if (!sec || sec.isEnabled !== true) {
+      return res.status(400).json({
+        code: "SECTION_NOT_ENABLED",
+        message: `Menu section '${sectionKey}' is not enabled on branch ${branchId}`,
+        details: { enabledSections: (branch.menuSections || []).filter(s => s.isEnabled).map(s => s.key) }
+      });
+    }
+
+    // 4) Build payload
+    const payload = {
       branchId,
+      vendorId: branch.vendorId, // trust server-side
       sectionKey,
-      itemType,
-      nameEnglish,
-      nameArabic,
-      description,
-      allergens = [],
-      tags = [],
-      isFeatured = false,
-      isActive = true,
-      calories = 0,
-      sku,
-      isAvailable = true,
-      preparationTimeInMinutes = 10,
-      // Accept both "ingredient" (string) and "ingredients" (array)
-      ingredient,
-      ingredients,
-      addons = [],
-      isSpicy = false,
-      discount, // {type, value, validUntil}
-      isSizedBased = false,
-      sizes = [],
-      fixedPrice = 0,
-      offeredPrice = null,
-      imageUrl = "",
-      videoUrl = "",
-      sortOrder = 0,
-    } = req.body || {};
 
-    if (!branchId || !sectionKey || !nameEnglish || !nameArabic) {
-      return res.status(400).json({ message: "branchId, sectionKey, nameEnglish, nameArabic are required" });
+      itemType: req.body.itemType,
+      nameEnglish: req.body.nameEnglish,
+      nameArabic: req.body.nameArabic,
+      description: req.body.description ?? "",
+
+      imageUrl: req.body.imageUrl ?? "",
+      videoUrl: req.body.videoUrl ?? "",
+
+      allergens: Array.isArray(req.body.allergens) ? req.body.allergens : [],
+      tags: Array.isArray(req.body.tags) ? req.body.tags : [],
+
+      isFeatured: !!req.body.isFeatured,
+      isActive: req.body.isActive !== false,       // default true
+      isAvailable: req.body.isAvailable !== false, // default true
+      isSpicy: !!req.body.isSpicy,
+
+      calories: req.body.calories ?? 0,
+      sku: req.body.sku ?? "",
+      preparationTimeInMinutes: req.body.preparationTimeInMinutes ?? 0,
+
+      ingredients: Array.isArray(req.body.ingredients) ? req.body.ingredients : [],
+      addons: Array.isArray(req.body.addons) ? req.body.addons : [],
+
+      discount: req.body.discount || null,
+
+      isSizedBased: !!req.body.isSizedBased,
+      sizes: Array.isArray(req.body.sizes) ? req.body.sizes : [],
+
+      fixedPrice: Number(req.body.fixedPrice ?? 0),
+      offeredPrice: req.body.offeredPrice != null ? Number(req.body.offeredPrice) : null,
+
+      sortOrder: Number(req.body.sortOrder ?? 0),
+    };
+
+    // 5) Business validation
+    const errors = validateBusinessRules(payload);
+    if (errors.length) {
+      return res.status(400).json({ code: "VALIDATION_FAILED", message: "Invalid payload", errors });
     }
 
-    const branch = await loadBranchByPublicId(branchId);
-    if (!branch) return res.status(404).json({ message: "Branch not found" });
-    if (!(await ensureCanManageBranch(uid, branch))) {
-      return res.status(403).json({ message: "Forbidden" });
+    // 6) Persist
+    const item = await MenuItem.create(payload);
+
+    // (Optional) Keep a fast counter in Branch.menuSections[i].itemCount
+    try {
+      const i = branch.menuSections.findIndex((s) => s.key === sectionKey);
+      if (i >= 0) {
+        // Only count active items in that section
+        const activeCount = await MenuItem.countDocuments({ branchId, sectionKey, isActive: true });
+        branch.menuSections[i].itemCount = activeCount;
+        await branch.save();
+      }
+    } catch (e) {
+      // not fatal
+      console.warn("itemCount update failed:", e.message);
     }
-
-    const sectionKeyUC = String(sectionKey).toUpperCase().trim();
-
-    // Normalize ingredients
-    const normalizedIngredients = Array.isArray(ingredients)
-      ? ingredients
-      : (ingredient ? [String(ingredient)] : []);
-
-    const item = await MenuItem.create({
-      branchId,
-      vendorId: branch.vendorId,
-      sectionKey: sectionKeyUC,
-      sortOrder,
-
-      itemType,
-      nameEnglish,
-      nameArabic,
-      description,
-
-      imageUrl,
-      videoUrl,
-
-      allergens,
-      tags,
-
-      isFeatured,
-      isActive,
-      isAvailable,
-      isSpicy,
-
-      calories,
-      sku,
-      preparationTimeInMinutes,
-
-      ingredients: normalizedIngredients,
-      addons,
-
-      isSizedBased,
-      sizes: isSizedBased ? sizes : [],
-      fixedPrice: isSizedBased ? 0 : fixedPrice,
-      offeredPrice: offeredPrice ?? null,
-
-      discount, // optional
-    });
-
-    // Best effort: bump the section counter
-    await bumpSectionCount(branchId, sectionKeyUC, +1);
 
     return res.status(201).json({ message: "Menu item created", item });
-  } catch (e) {
-    console.error("createMenuItem error:", e);
-    return res.status(500).json({ message: e.message });
-  }
-};
-
-/* ---------- LIST: GET /api/menu/items?branchId=...&sectionKey=... ---------- */
-export const listMenuItems = async (req, res) => {
-  try {
-    const uid = req.user?.uid;
-    const { branchId } = req.query;
-    if (!branchId) return res.status(400).json({ message: "branchId is required" });
-
-    const branch = await loadBranchByPublicId(branchId);
-    if (!branch) return res.status(404).json({ message: "Branch not found" });
-    if (!(await ensureCanManageBranch(uid, branch))) {
-      return res.status(403).json({ message: "Forbidden" });
-    }
-
-    const page  = Math.max(parseInt(req.query.page || "1", 10), 1);
-    const limit = Math.min(Math.max(parseInt(req.query.limit || "20", 10), 1), 100);
-    const skip  = (page - 1) * limit;
-
-    const sectionKey = req.query.sectionKey?.trim().toUpperCase();
-    const q = req.query.q?.trim();
-    const onlyActive = String(req.query.onlyActive ?? "false").toLowerCase() === "true";
-
-    const filter = { branchId };
-    if (sectionKey) filter.sectionKey = sectionKey;
-    if (onlyActive) filter.isActive = true;
-    if (q) {
-      filter.$or = [
-        { nameEnglish: { $regex: q, $options: "i" } },
-        { nameArabic:  { $regex: q, $options: "i" } },
-        { sku:         { $regex: q, $options: "i" } },
-        { tags:        { $regex: q, $options: "i" } },
-      ];
-    }
-
-    const [items, total] = await Promise.all([
-      MenuItem.find(filter)
-        .sort({ sectionKey: 1, sortOrder: 1, nameEnglish: 1 })
-        .skip(skip)
-        .limit(limit)
-        .lean(),
-      MenuItem.countDocuments(filter),
-    ]);
-
-    return res.json({
-      branchId,
-      page,
-      limit,
-      total,
-      totalPages: Math.ceil(total / limit),
-      items,
-    });
-  } catch (e) {
-    console.error("listMenuItems error:", e);
-    return res.status(500).json({ message: e.message });
-  }
-};
-
-/* ---------- READ ONE: GET /api/menu/items/:id ---------- */
-export const getMenuItem = async (req, res) => {
-  try {
-    const uid = req.user?.uid;
-    const { id } = req.params;
-
-    const item = await MenuItem.findById(id).lean();
-    if (!item) return res.status(404).json({ message: "Item not found" });
-
-    const branch = await loadBranchByPublicId(item.branchId);
-    if (!branch) return res.status(404).json({ message: "Branch not found" });
-    if (!(await ensureCanManageBranch(uid, branch))) {
-      return res.status(403).json({ message: "Forbidden" });
-    }
-
-    return res.json({ item });
-  } catch (e) {
-    console.error("getMenuItem error:", e);
-    return res.status(500).json({ message: e.message });
-  }
-};
-
-/* ---------- UPDATE: PATCH /api/menu/items/:id ---------- */
-export const updateMenuItem = async (req, res) => {
-  try {
-    const uid = req.user?.uid;
-    const { id } = req.params;
-
-    const existing = await MenuItem.findById(id);
-    if (!existing) return res.status(404).json({ message: "Item not found" });
-
-    const branch = await loadBranchByPublicId(existing.branchId);
-    if (!branch) return res.status(404).json({ message: "Branch not found" });
-    if (!(await ensureCanManageBranch(uid, branch))) {
-      return res.status(403).json({ message: "Forbidden" });
-    }
-
-    const payload = { ...req.body };
-
-    // section change? keep counts in sync
-    let sectionChanged = false;
-    if (payload.sectionKey && String(payload.sectionKey).toUpperCase().trim() !== existing.sectionKey) {
-      sectionChanged = true;
-      payload.sectionKey = String(payload.sectionKey).toUpperCase().trim();
-    }
-
-    // normalize ingredients if client sends "ingredient"
-    if (payload.ingredient && !payload.ingredients) {
-      payload.ingredients = [String(payload.ingredient)];
-      delete payload.ingredient;
-    }
-
-    // pricing normalizations
-    if (payload.isSizedBased === true) {
-      payload.fixedPrice = 0;
-      if (!Array.isArray(payload.sizes)) payload.sizes = [];
-    } else if (payload.isSizedBased === false) {
-      payload.sizes = [];
-    }
-
-    const updated = await MenuItem.findByIdAndUpdate(
-      id,
-      { $set: payload },
-      { new: true }
-    ).lean();
-
-    if (sectionChanged) {
-      await Promise.all([
-        bumpSectionCount(existing.branchId, existing.sectionKey, -1),
-        bumpSectionCount(existing.branchId, updated.sectionKey, +1),
-      ]);
-    }
-
-    return res.json({ message: "Updated", item: updated });
-  } catch (e) {
-    console.error("updateMenuItem error:", e);
-    return res.status(500).json({ message: e.message });
-  }
-};
-
-/* ---------- DELETE: DELETE /api/menu/items/:id ---------- */
-export const deleteMenuItem = async (req, res) => {
-  try {
-    const uid = req.user?.uid;
-    const { id } = req.params;
-
-    const existing = await MenuItem.findById(id);
-    if (!existing) return res.status(404).json({ message: "Item not found" });
-
-    const branch = await loadBranchByPublicId(existing.branchId);
-    if (!branch) return res.status(404).json({ message: "Branch not found" });
-    if (!(await ensureCanManageBranch(uid, branch))) {
-      return res.status(403).json({ message: "Forbidden" });
-    }
-
-    await MenuItem.deleteOne({ _id: id });
-    await bumpSectionCount(existing.branchId, existing.sectionKey, -1);
-
-    return res.json({ message: "Deleted", id });
-  } catch (e) {
-    console.error("deleteMenuItem error:", e);
-    return res.status(500).json({ message: e.message });
-  }
-};
-
-/* ---------- QUICK AVAILABILITY: PATCH /api/menu/items/:id/availability ---------- */
-export const setAvailability = async (req, res) => {
-  try {
-    const uid = req.user?.uid;
-    const { id } = req.params;
-    const { isAvailable } = req.body;
-
-    if (typeof isAvailable !== "boolean") {
-      return res.status(400).json({ message: "isAvailable (boolean) is required" });
-    }
-
-    const existing = await MenuItem.findById(id);
-    if (!existing) return res.status(404).json({ message: "Item not found" });
-
-    const branch = await loadBranchByPublicId(existing.branchId);
-    if (!branch) return res.status(404).json({ message: "Branch not found" });
-    if (!(await ensureCanManageBranch(uid, branch))) {
-      return res.status(403).json({ message: "Forbidden" });
-    }
-
-    existing.isAvailable = isAvailable;
-    await existing.save();
-
-    return res.json({ message: "Availability updated", id, isAvailable });
-  } catch (e) {
-    console.error("setAvailability error:", e);
-    return res.status(500).json({ message: e.message });
+  } catch (err) {
+    console.error("createMenuItem error:", err);
+    return res.status(500).json({ code: "SERVER_ERROR", message: err.message });
   }
 };
