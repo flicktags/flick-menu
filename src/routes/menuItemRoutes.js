@@ -3,33 +3,35 @@ import { verifyFirebaseToken } from "../middlewares/authMiddleware.js";
 import {
   createMenuItem,
   listMenuItems,
-  getMenuItem,
+  getMenuItemById,
   updateMenuItem,
-  deleteMenuItem
-//   setAvailability,
+  deleteMenuItem,
 } from "../controllers/menuItemController.js";
 
-const router = express.Router();
+const menuItemRouter = express.Router();
 
-// All endpoints require Firebase auth
-router.use(verifyFirebaseToken);
+// Create in a specific branch/section
+menuItemRouter.post(
+  "/branches/:branchId/sections/:sectionKey/items",
+  verifyFirebaseToken,
+  createMenuItem
+);
 
-// Create
-router.post("/items", createMenuItem);
+// List (by branch and/or section) — supports ?page=&limit=&isActive=
+menuItemRouter.get(
+  "/branches/:branchId/sections/:sectionKey/items",
+  verifyFirebaseToken,
+  listMenuItems
+);
+menuItemRouter.get(
+  "/branches/:branchId/items",
+  verifyFirebaseToken,
+  listMenuItems
+);
 
-// List (by branch, optional sectionKey)
-router.get("/items", listMenuItems);
+// Single item CRUD
+menuItemRouter.get("/items/:id", verifyFirebaseToken, getMenuItemById);
+menuItemRouter.patch("/items/:id", verifyFirebaseToken, updateMenuItem);
+menuItemRouter.delete("/items/:id", verifyFirebaseToken, deleteMenuItem);
 
-// Read one
-router.get("/items/:id", getMenuItem);
-
-// Update
-router.patch("/items/:id", updateMenuItem);
-
-// Quick availability toggle
-// router.patch("/items/:id/availability", setAvailability);
-
-// Delete
-router.delete("/items/:id", deleteMenuItem);
-
-export default router;
+export default menuItemRouter;
