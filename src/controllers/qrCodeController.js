@@ -85,3 +85,54 @@ console.log("Decoded Token:", userId);
   }
 };
 export default generateQr ;
+
+export const getBranchQrs = async (req, res) => {
+  try {
+    // Prefer Authorization: Bearer <token>, fallback ?token=...
+    const authHeader = req.headers.authorization || "";
+    const hdrToken = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : null;
+    const token = hdrToken || req.query.token;
+    if (!token) return res.status(400).json({ message: "Firebase token required" });
+
+    // Verify token → userId → vendor
+    const decoded = await admin.auth().verifyIdToken(token);
+    const userId = decoded.uid;
+
+    const vendor = await Vendor.findOne({ userId });
+    if (!vendor) return res.status(404).json({ message: "No vendor associated with this account" });
+
+    // Params
+    const { branchId } = req.params; // Mongo _id string, e.g. "68e40176727a4e93b229efab"
+    if (!branchId) return res.status(400).json({ message: "branchId (Mongo _id) is required" });
+
+    // Validate branch and ownership
+    const branch = await Branch.findById(branchId);
+    if (!branch) return res.status(404).json({ message: "Branch not found" });
+    if (branch.vendorId !== vendor.vendorId) {
+      return res.status(403).json({ message: "Branch does not belong to your vendor account" });
+    }
+
+    // Build filter that works whether QrCode.branchId is stored as String or ObjectId
+    const filters = [{ branchId: branchId }, { branchId: branch._id }];
+    // Extra safety: ensure QR records are for the same vendor
+    filters.push({ vendorId: vendor.vendorId });
+
+    const query = {
+      $and: [
+        { $or: [{ branchId: branchId }, { branchId: branch._id }] },
+        { vendorId: vendor.vendorId },
+      ],
+    };
+
+    const items = await QrCode.find(query).sort({ createdAt: -1 }).lean();
+    return res.status(200).json({
+      branchId: branch._id.toString(),
+      vendorId: vendor.vendorId,
+      total: items.length,
+      items,
+    });
+  } catch (err) {
+    console.error("QR List Error:", err);
+    return res.status(500).json({ message: err.message });
+  }
+};
