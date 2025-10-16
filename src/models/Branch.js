@@ -112,7 +112,7 @@ const branchSchema = new mongoose.Schema(
 
     // NEW: lightweight enabled menu sections per branch
     menuSections: { type: [menuSectionSchema], default: [] }, 
-    qrLimit: { type: Number, default: 10 }, // max allowed QR codes
+    qrLimit: { type: Number, default: 0 }, 
     qrGenerated: { type: Number, default: 0 }, // how many generated so far
     status: { type: String, enum: ["active", "inactive", "archived"], default: "active" },
   },
