@@ -19,7 +19,7 @@ function getBearerToken(req) {
  * - Counter is BRANCH-WIDE: numeric suffix continues from Branch.qrGenerated.
  * - Uses atomic $inc to avoid overlaps under concurrency.
  */
-const generateQr = async (req, res) => {
+c = async (req, res) => {
   try {
     // 1) Auth
     const bearer = getBearerToken(req);
@@ -97,34 +97,66 @@ const generateQr = async (req, res) => {
     for (let i = 0; i < count; i++) {
       const suffix = startIndex + i;               // 1..N (branch-wide)
       const qrId = await generateQrId();
-      const qrDataUrl = `${baseUrl}?branch=${encodeURIComponent(branchBusinessId)}&type=${encodeURIComponent(type)}&qrId=${encodeURIComponent(qrId)}`;
+      // const qrDataUrl = `${baseUrl}?branch=${encodeURIComponent(branchBusinessId)}&type=${encodeURIComponent(type)}&qrId=${encodeURIComponent(qrId)}`;
+       const qrDataUrl =
+    `${baseUrl}` +
+    `?branch=${encodeURIComponent(branchBusinessId)}` +
+    `&type=${encodeURIComponent(type)}` +
+    `&qrId=${encodeURIComponent(qrId)}` +
+    `&number=${encodeURIComponent(qrNumber)}`;      // <— added
       const qrImage = await QRCode.toDataURL(qrDataUrl);
 
-      const doc = await QrCode.create({
-        qrId,
-        branchId: String(branch._id),              // store Mongo _id as string (matches your current usage)
-        vendorId: vendor.vendorId,
-        type,                                      // store normalized lowercase
-        label,
-        number: `${type}-${suffix}`,
-        qrUrl: qrImage,
-        active: true,
-      });
+      // const doc = await QrCode.create({
+      //   qrId,
+      //   branchId: String(branch._id),              // store Mongo _id as string (matches your current usage)
+      //   vendorId: vendor.vendorId,
+      //   type,                                      // store normalized lowercase
+      //   label,
+      //   number: `${type}-${suffix}`,
+      //   qrUrl: qrImage,
+      //   active: true,
+      // });
 
-      created.push({
-        qrId: doc.qrId,
-        branchId: doc.branchId,
-        vendorId: doc.vendorId,
-        type: doc.type,
-        label: doc.label,
-        number: doc.number,
-        qrUrl: doc.qrUrl,
-        active: doc.active,
-        _id: doc._id,
-        createdAt: doc.createdAt,
-        updatedAt: doc.updatedAt,
-        __v: doc.__v,
-      });
+      const doc = await QrCode.create({
+    qrId,
+    branchId: String(branch._id),                   // keep storing Mongo _id as string
+    vendorId: vendor.vendorId,
+    type,
+    label,
+    number: qrNumber,                               // same value persisted
+    qrUrl: qrImage,
+    active: true,
+  });
+
+      // created.push({
+      //   qrId: doc.qrId,
+      //   branchId: doc.branchId,
+      //   vendorId: doc.vendorId,
+      //   type: doc.type,
+      //   label: doc.label,
+      //   number: doc.number,
+      //   qrUrl: doc.qrUrl,
+      //   active: doc.active,
+      //   _id: doc._id,
+      //   createdAt: doc.createdAt,
+      //   updatedAt: doc.updatedAt,
+      //   __v: doc.__v,
+      // });
+
+       created.push({
+    qrId: doc.qrId,
+    branchId: doc.branchId,
+    vendorId: doc.vendorId,
+    type: doc.type,
+    label: doc.label,
+    number: doc.number,
+    qrUrl: doc.qrUrl,
+    active: doc.active,
+    _id: doc._id,
+    createdAt: doc.createdAt,
+    updatedAt: doc.updatedAt,
+    __v: doc.__v,
+  });
     }
 
     // 8) Respond (DO NOT add to qrGenerated again here)
