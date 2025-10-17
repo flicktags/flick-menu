@@ -13,12 +13,24 @@ function getBearerToken(req) {
   return m ? m[1] : null;
 }
 
+/** Extract numeric suffix from "...-123" (used for sorting) */
+function suffixOf(numStr) {
+  const m = /(\d+)$/.exec(String(numStr || ""));
+  return m ? parseInt(m[1], 10) : -Infinity;
+}
+
+/** "table"|"room" -> "Table"|"Room" (for responses) */
+function toTitleType(t) {
+  const s = String(t || "").toLowerCase();
+  return s === "table" ? "Table" : s === "room" ? "Room" : s;
+}
+
 /**
  * POST /api/qrcode/generate
  * Body: { branchId: "BR-000004", type: "table"|"room", numberOfQrs: 5, label?: "Delux Room", token?: "<legacy>" }
- * - Auth: Prefer Authorization: Bearer <token>, fallback to body.token (for backward compat).
- * - Counter is BRANCH-WIDE: numeric suffix continues from Branch.qrGenerated.
- * - Uses atomic $inc to avoid overlaps under concurrency.
+ * - Auth: Bearer (header) preferred; falls back to body.token for backward compat.
+ * - Branch-wide counter via atomic $inc on Branch.qrGenerated.
+ * - DB stores type in lowercase (schema enum ["room","table"]); API responses return TitleCase.
  */
 const generateQr = async (req, res) => {
   try {
@@ -45,12 +57,12 @@ const generateQr = async (req, res) => {
       return res.status(400).json({ message: "numberOfQrs must be a positive integer" });
     }
 
-    // Normalize type: use lowercase for URL/number prefix, TitleCase for DB (matches enum ["Room","Table"])
+    // Normalize type to lowercase for DB
     const typeLower = typeRaw.toLowerCase();
     if (!["table", "room"].includes(typeLower)) {
       return res.status(400).json({ message: 'type must be "table" or "room"' });
     }
-    const typeStored = typeLower === "table" ? "Table" : "Room";
+    const typeTitle = toTitleType(typeLower);
     const label = typeof labelRaw === "string" && labelRaw.trim().length > 0 ? labelRaw.trim() : undefined;
 
     // 3) Vendor by Firebase user
@@ -107,18 +119,19 @@ const generateQr = async (req, res) => {
         qrId,
         branchId: String(branch._id),                 // store Mongo _id as string (matches your current usage)
         vendorId: vendor.vendorId,
-        type: typeStored,                             // "Table" or "Room" to satisfy enum
+        type: typeLower,                              // DB expects lowercase per schema
         label,
-        number: qrNumber,                             // persisted number with prefix
+        number: qrNumber,
         qrUrl: qrImage,
         active: true,
       });
 
+      // Respond with TitleCase type
       created.push({
         qrId: doc.qrId,
         branchId: doc.branchId,
         vendorId: doc.vendorId,
-        type: doc.type,
+        type: toTitleType(doc.type),
         label: doc.label,
         number: doc.number,
         qrUrl: doc.qrUrl,
@@ -143,15 +156,14 @@ const generateQr = async (req, res) => {
   }
 };
 
-export default generateQr;
-
 /**
  * GET /api/qrcode/branch/:branchId
  * - :branchId is the Mongo ObjectId string (e.g., "68e40176727a4e93b229efab")
  * - Auth: Authorization: Bearer <token>
  * - Returns QRs in ASCENDING order by numeric suffix (table-1, table-2, …).
+ * - Returns type as "Table"/"Room".
  */
-export const getBranchQrs = async (req, res) => {
+const getBranchQrs = async (req, res) => {
   try {
     // 1) Auth
     const token = getBearerToken(req);
@@ -175,30 +187,31 @@ export const getBranchQrs = async (req, res) => {
     }
 
     // 4) Fetch and sort ascending by numeric suffix in "number"
-    const items = await QrCode.find({
+    const raw = await QrCode.find({
       $and: [
         { $or: [{ branchId: branchObjectId }, { branchId: branch._id }] },
         { vendorId: vendor.vendorId },
       ],
     }).lean();
 
-    const suffix = (numStr) => {
-      const m = /(\d+)$/.exec(String(numStr || ""));
-      return m ? parseInt(m[1], 10) : 0;
-    };
-
-    items.sort((a, b) => {
-      // group by type (optional)
+    raw.sort((a, b) => {
+      // group by type for stability (optional)
       const tA = String(a.type || "");
       const tB = String(b.type || "");
       if (tA !== tB) return tA.localeCompare(tB);
       // then numeric suffix
-      const nA = suffix(a.number);
-      const nB = suffix(b.number);
+      const nA = suffixOf(a.number);
+      const nB = suffixOf(b.number);
       if (nA !== nB) return nA - nB;
       // final fallback
       return String(a._id).localeCompare(String(b._id));
     });
+
+    // Map to response with TitleCase type
+    const items = raw.map(d => ({
+      ...d,
+      type: toTitleType(d.type),
+    }));
 
     return res.status(200).json({
       branchObjectId,
@@ -213,6 +226,118 @@ export const getBranchQrs = async (req, res) => {
   }
 };
 
+/**
+ * POST /api/qrcode/branch/:branchId/delete-latest
+ * Body: { type: "table"|"room", count: number }
+ * - Deletes the latest `count` QRs for that type (highest numeric suffix) on that branch.
+ * - Only the specified type is affected.
+ * - Decrements Branch.qrGenerated by the actual deleted count (clamped at 0).
+ * - Returns type as "Table"/"Room".
+ */
+const deleteLatestQrs = async (req, res) => {
+  try {
+    // 1) Auth
+    const token = getBearerToken(req);
+    if (!token) return res.status(400).json({ message: "Firebase token required" });
+
+    const decoded = await admin.auth().verifyIdToken(token);
+    const userId = decoded.uid;
+
+    // 2) Inputs
+    const branchObjectId = String(req.params?.branchId || "").trim();   // Mongo _id of branch
+    const rawType = String(req.body?.type || "").trim().toLowerCase();  // "table" | "room"
+    const rawCount = req.body?.count;
+
+    if (!branchObjectId) return res.status(400).json({ message: "branchId (Mongo _id) is required" });
+    if (!["table", "room"].includes(rawType)) {
+      return res.status(400).json({ message: 'type must be "table" or "room"' });
+    }
+
+    const count = parseInt(rawCount, 10);
+    if (!Number.isFinite(count) || count <= 0) {
+      return res.status(400).json({ message: "count must be a positive integer" });
+    }
+
+    // 3) Vendor
+    const vendor = await Vendor.findOne({ userId }).lean();
+    if (!vendor) return res.status(404).json({ message: "No vendor associated with this account" });
+
+    // 4) Branch & ownership
+    const branch = await Branch.findById(branchObjectId).lean();
+    if (!branch) return res.status(404).json({ message: "Branch not found" });
+    if (branch.vendorId !== vendor.vendorId) {
+      return res.status(403).json({ message: "Branch does not belong to your vendor account" });
+    }
+
+    // 5) Match type (support legacy rows that may have TitleCase)
+    const typeCandidates = [rawType, rawType.charAt(0).toUpperCase() + rawType.slice(1)];
+
+    // 6) Get all QRs for that branch + type; sort by numeric suffix DESC (top/backward)
+    const candidates = await QrCode.find({
+      $and: [
+        { $or: [{ branchId: branchObjectId }, { branchId: branch._id }] },
+        { vendorId: vendor.vendorId },
+        { type: { $in: typeCandidates } },
+      ],
+    })
+      .select("_id number type")
+      .lean();
+
+    if (!candidates.length) {
+      return res.status(200).json({
+        message: `No QRs found for type "${toTitleType(rawType)}" on this branch.`,
+        deleted: 0,
+        deletedNumbers: [],
+        newQrGenerated: branch.qrGenerated ?? 0,
+      });
+    }
+
+    candidates.sort((a, b) => suffixOf(b.number) - suffixOf(a.number)); // delete highest numbers first
+
+    const toDelete = candidates.slice(0, Math.min(count, candidates.length));
+    const ids = toDelete.map(d => d._id);
+    const deletedNumbers = toDelete.map(d => String(d.number || ""));
+
+    if (ids.length === 0) {
+      return res.status(200).json({
+        message: `Nothing to delete for type "${toTitleType(rawType)}".`,
+        deleted: 0,
+        deletedNumbers: [],
+        newQrGenerated: branch.qrGenerated ?? 0,
+      });
+    }
+
+    // 7) Delete selected docs
+    const delRes = await QrCode.deleteMany({ _id: { $in: ids } });
+    const actuallyDeleted = delRes?.deletedCount || 0;
+
+    // 8) Decrement branch.qrGenerated by actuallyDeleted (clamped to >= 0)
+    if (actuallyDeleted > 0) {
+      const fresh = await Branch.findById(branch._id, "qrGenerated").lean();
+      const current = Number(fresh?.qrGenerated ?? 0);
+      const next = Math.max(0, current - actuallyDeleted);
+      await Branch.findByIdAndUpdate(branch._id, { $set: { qrGenerated: next } });
+    }
+
+    const after = await Branch.findById(branch._id, "qrGenerated").lean();
+
+    return res.status(200).json({
+      message: `Deleted ${actuallyDeleted} ${toTitleType(rawType)} QR(s) from the top.`,
+      type: toTitleType(rawType),
+      deleted: actuallyDeleted,
+      deletedNumbers, // e.g. ["table-11", "table-10", ...]
+      newQrGenerated: Number(after?.qrGenerated ?? 0),
+    });
+  } catch (err) {
+    console.error("QR Delete Error:", err);
+    return res.status(500).json({ message: err.message });
+  }
+};
+
+// ✅ Exactly one default export:
+export default generateQr;
+// ✅ Named exports for others:
+export { getBranchQrs, deleteLatestQrs };
 
 
 
