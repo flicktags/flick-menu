@@ -7,7 +7,7 @@ import lookupsApi from "./routes/LookupsAPI.js";
 import userRouter from "./routes/user.js"
 import menuItemRoutes from "./routes/menuItemRoutes.js";
 import QrCodeRouter from "./routes/qrRoutes.js";
-import PublicRouter from "./routes/publicRoutes.js";
+import publicRoutes from "./routes/publicRoutes.js";
 
 const app = express();
 
@@ -24,7 +24,7 @@ app.use("/api/lookups", lookupsApi);
 app.use('/api/user', userRouter);
 app.use("/api/menu", menuItemRoutes);
 app.use("/api/qrcode", QrCodeRouter);
-app.use("/api/public", PublicRouter);
+app.use("/api/public", publicRoutes);
 
 
 
