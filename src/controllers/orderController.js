@@ -1,169 +1,134 @@
-// controllers/orderController.js
+// Order creation for public (no auth)
 import Branch from "../models/Branch.js";
-import Order from "../models/Order.js";
-import { generateOrderId } from "../utils/generateOrderId.js";
+import Counter from "../models/Counter.js";
+import mongoose from "mongoose";
 
 /**
  * POST /api/public/orders
- * Public endpoint used by the customer view.
+ * Body shape (from customer_view):
+ * {
+ *   branch: "BR-000004",
+ *   qr: { type: "room", number: "room-1", qrId: "QR-000131" },
+ *   currency: "BHD",
+ *   customer: { name: "Shabir", phone: null },
+ *   items: [...],
+ *   pricing: {...},   // client-side calc (we will recompute/validate)
+ *   remarks: "leave at the desk",
+ *   source: "customer_view"
+ * }
  */
 export const createOrder = async (req, res) => {
   try {
-    const {
-      branch: branchBusinessId,
-      qr = {},
-      currency: currencyFromClient,
-      customer = {},
-      items = [],
-      remarks = null,
-      source = "customer_view",
-    } = req.body || {};
+    const body = req.body || {};
+    const branchId = String(body.branch || "").trim();
+    if (!branchId) return res.status(400).json({ error: "branch is required" });
 
-    // Basic validation
-    if (!branchBusinessId || typeof branchBusinessId !== "string") {
-      return res.status(400).json({ message: 'Field "branch" (business id) is required' });
-    }
-    if (!Array.isArray(items) || items.length === 0) {
-      return res.status(400).json({ message: "At least one item is required" });
-    }
+    const branch = await Branch.findOne({ branchId }).lean();
+    if (!branch) return res.status(404).json({ error: "Branch not found" });
 
-    // Branch lookup
-    const branch = await Branch.findOne({ branchId: branchBusinessId }).lean();
-    if (!branch) {
-      return res.status(404).json({ message: "Branch not found" });
-    }
+    // --- Recompute pricing on server (basic validation) ---
+    const items = Array.isArray(body.items) ? body.items : [];
+    if (items.length === 0) return res.status(400).json({ error: "No items" });
 
-    // Taxes / currency from branch
-    const currency = String(branch.currency || currencyFromClient || "BHD");
-    const vatPercent = toNumber(branch.taxes?.vatPercentage, 0);
-    const serviceChargePercent = toNumber(branch.taxes?.serviceChargePercentage, 0);
+    const svcPct = Number(branch?.taxes?.serviceChargePercentage ?? 0); // e.g. 5
+    const vatPct = Number(branch?.taxes?.vatPercentage ?? 0);           // e.g. 10
 
-    // Normalize items & compute line totals
-    const normalizedItems = [];
-    for (const raw of items) {
-      const isSizedBased = raw?.isSizedBased === true;
+    let subtotal = 0;
+    const normalizedItems = items.map((it) => {
+      const qty = Number(it.quantity ?? 1);
+      const unitBase = Number(it.unitBasePrice ?? 0);
+      const addonsTotal = (Array.isArray(it.addons) ? it.addons : [])
+        .reduce((sum, a) => sum + Number(a?.price ?? 0), 0);
 
-      const qty = toPosInt(raw?.quantity, 1);
-      const sizeLabel = isSizedBased ? String(raw?.size?.label || "") : null;
-      const sizePrice = isSizedBased ? toMoney(raw?.size?.price) : null;
+      const line = (unitBase + addonsTotal) * qty;
+      subtotal += line;
 
-      const baseUnitPrice = isSizedBased ? sizePrice : toMoney(raw?.unitBasePrice);
-      const addons = Array.isArray(raw?.addons)
-        ? raw.addons.map((a) => ({
-            id: toStringSafe(a?.id),
-            label: toStringSafe(a?.label),
-            price: toMoney(a?.price),
-          }))
-        : [];
-
-      const addonsUnitTotal = round2(addons.reduce((s, a) => s + toMoney(a.price), 0));
-      const unitTotal = round2(baseUnitPrice + addonsUnitTotal);
-      const lineTotal = round2(unitTotal * qty);
-
-      normalizedItems.push({
-        itemId: toStringSafe(raw?.itemId),
-        nameEnglish: toStringSafe(raw?.nameEnglish),
-        nameArabic: toStringSafe(raw?.nameArabic),
-        imageUrl: toStringSafe(raw?.imageUrl),
-
-        isSizedBased,
-        size: isSizedBased ? { label: sizeLabel, price: sizePrice } : null,
-
-        addons,                // per-unit addons
-        unitBasePrice: baseUnitPrice,
-        addonsUnitTotal,       // per-unit total addons price
-        unitTotal,             // per-unit total (base + addons)
-
+      return {
+        itemId: String(it.itemId || ""),
+        nameEnglish: String(it.nameEnglish || ""),
+        nameArabic: String(it.nameArabic || ""),
+        imageUrl: String(it.imageUrl || ""),
+        isSizedBased: it.isSizedBased === true,
+        size: it.size
+          ? {
+              label: String(it.size.label || ""),
+              price: Number(it.size.price ?? 0),
+            }
+          : null,
+        addons: (Array.isArray(it.addons) ? it.addons : []).map((a) => ({
+          id: String(a.id || a._id || a.label || ""),
+          label: String(a.label || ""),
+          price: Number(a.price ?? 0),
+        })),
+        unitBasePrice: unitBase,
         quantity: qty,
-        notes: toStringNullable(raw?.notes),
+        notes: it.notes ? String(it.notes) : null,
+        lineTotal: Number(line.toFixed(3)),
+      };
+    });
 
-        lineTotal,             // unitTotal * qty
-      });
-    }
+    const serviceChargeAmount = Number(((subtotal * svcPct) / 100).toFixed(3));
+    const vatAmount = Number((((subtotal + serviceChargeAmount) * vatPct) / 100).toFixed(3));
+    const grandTotal = Number((subtotal + serviceChargeAmount + vatAmount).toFixed(3));
 
-    // Totals
-    const subtotal = round2(normalizedItems.reduce((s, i) => s + i.lineTotal, 0));
-    const serviceChargeAmount = round2((subtotal * serviceChargePercent) / 100);
-    const vatBase = round2(subtotal + serviceChargeAmount);
-    const vatAmount = round2((vatBase * vatPercent) / 100);
-    const grandTotal = round2(vatBase + vatAmount);
+    // --- Generate order number using a counter (NO 'key' field) ---
+    const counterId = `ORD-${branchId}`;
+    const counter = await Counter.findOneAndUpdate(
+      { _id: counterId },            // <-- use _id, not 'key'
+      { $inc: { seq: 1 } },
+      { new: true, upsert: true }    // strict-safe
+    ).lean();
 
-    // Persist
-    const orderId = await generateOrderId(); // e.g., "ORD-000001"
-    const doc = await Order.create({
-      orderId,
-      status: "pending",
-      branchObjectId: String(branch._id),
-      branchBusinessId: branch.branchId,
+    const seq = Number(counter?.seq ?? 1);
+    const orderNumber = `${branchId}-${String(seq).padStart(6, "0")}`;
+
+    // --- Persist order (minimal schema-less save for now) ---
+    // If you DO have an Order model, use it here. For a lightweight start:
+    const Order = mongoose.connection.collection("orders");
+
+    const doc = {
+      orderNumber,
+      branchId,
       vendorId: branch.vendorId,
-      currency,
       qr: {
-        type: toStringSafe(qr?.type),    // "table" | "room"
-        number: toStringSafe(qr?.number),// "table-9"
-        qrId: toStringSafe(qr?.qrId),
+        type: String(body?.qr?.type || ""),
+        number: String(body?.qr?.number || ""),
+        qrId: String(body?.qr?.qrId || ""),
       },
+      currency: String(body.currency || branch.currency || ""),
       customer: {
-        name: toStringNullable(customer?.name),
-        phone: toStringNullable(customer?.phone),
+        name: body?.customer?.name ? String(body.customer.name) : null,
+        phone: body?.customer?.phone ? String(body.customer.phone) : null,
       },
       items: normalizedItems,
       pricing: {
-        subtotal,
-        serviceChargePercent,
+        subtotal: Number(subtotal.toFixed(3)),
+        serviceChargePercent: svcPct,
         serviceChargeAmount,
-        vatPercent,
+        vatPercent: vatPct,
         vatAmount,
         grandTotal,
       },
-      remarks: toStringNullable(remarks),
-      source: toStringSafe(source || "customer_view"),
-    });
+      remarks: body.remarks ? String(body.remarks) : null,
+      source: String(body.source || "customer_view"),
+      status: "PLACED",
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    };
+
+    await Order.insertOne(doc);
 
     return res.status(201).json({
       message: "Order placed",
-      order: {
-        _id: doc._id,
-        orderId: doc.orderId,
-        status: doc.status,
-        currency: doc.currency,
-        branchBusinessId: doc.branchBusinessId,
-        vendorId: doc.vendorId,
-        qr: doc.qr,
-        customer: doc.customer,
-        items: doc.items,
-        pricing: doc.pricing,
-        remarks: doc.remarks,
-        source: doc.source,
-        createdAt: doc.createdAt,
-      },
+      orderNumber,
+      branchId,
+      pricing: doc.pricing,
+      items: doc.items,
+      qr: doc.qr,
+      createdAt: doc.createdAt,
     });
   } catch (err) {
-    console.error("Order Error:", err);
-    return res.status(500).json({ message: err.message });
+    console.error("Create Order Error:", err);
+    return res.status(500).json({ error: err.message });
   }
 };
-
-// helpers
-function toNumber(v, d = 0) {
-  const n = Number(v);
-  return Number.isFinite(n) ? n : d;
-}
-function toPosInt(v, d = 1) {
-  const n = parseInt(v, 10);
-  return Number.isFinite(n) && n > 0 ? n : d;
-}
-function round2(n) {
-  return Math.round((Number(n) || 0) * 100) / 100;
-}
-function toMoney(v) {
-  const n = Number(v);
-  if (!Number.isFinite(n) || n < 0) return 0;
-  return round2(n);
-}
-function toStringSafe(v) {
-  return (v ?? "").toString();
-}
-function toStringNullable(v) {
-  const s = (v ?? "").toString().trim();
-  return s.length ? s : null;
-}

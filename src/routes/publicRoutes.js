@@ -23,11 +23,8 @@ import { createOrder } from "../controllers/orderController.js";
 
 const router = express.Router();
 
-// Public menu endpoints
 router.get("/menu", getPublicMenu);
 router.get("/menu/items", getPublicSectionItems);
-
-// Public order creation
 router.post("/orders", createOrder);
 
 export default router;
