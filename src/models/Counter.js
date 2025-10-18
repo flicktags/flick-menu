@@ -1,4 +1,4 @@
-// Simple counter collection for sequences like order numbers
+// src/models/Counter.js
 import mongoose from "mongoose";
 
 const CounterSchema = new mongoose.Schema(
@@ -10,4 +10,5 @@ const CounterSchema = new mongoose.Schema(
   { timestamps: false, strict: true }
 );
 
-export default mongoose.model("Counter", CounterSchema);
+// ✅ Prevent OverwriteModelError when the file is imported multiple times
+export default mongoose.models.Counter || mongoose.model("Counter", CounterSchema);
