@@ -9,5 +9,7 @@ const router = express.Router();
 
 router.get("/menu", getPublicMenu);
 router.get("/menu/items", getPublicSectionItems);
+PublicRouter.post("/orders", createOrder);
+
 
 export default router;
