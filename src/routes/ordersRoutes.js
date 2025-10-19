@@ -28,7 +28,7 @@ const router = express.Router();
 // Protected vendor/admin orders API (summary + list)
 router.get("/", getOrders);
 
-// Optional compatibility path if you were calling /api/orders/summary
+// Optional compatibility path (if you were calling /api/orders/summary)
 router.get("/summary", getOrders);
 
 export default router;

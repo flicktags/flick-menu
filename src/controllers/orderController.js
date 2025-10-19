@@ -240,11 +240,14 @@
 
 
 // src/controllers/orderController.js
+// src/controllers/orderController.js
+import admin from "../config/firebase.js";
+import Vendor from "../models/Vendor.js";
 import Branch from "../models/Branch.js";
 import Order from "../models/Order.js";
 import { nextSeqByKey, nextTokenForDay } from "../models/Counter.js";
 
-// --- helpers ---
+// ---------- helpers ----------
 function leftPad(value, size) {
   const s = String(value ?? "");
   return s.length >= size ? s : "0".repeat(size - s.length) + s;
@@ -269,13 +272,52 @@ function tzParts(tz = "UTC") {
     day: "2-digit",
   });
   const parts = fmt.formatToParts(new Date());
-  const y = parts.find(p => p.type === "year")?.value ?? "0000";
-  const m = parts.find(p => p.type === "month")?.value ?? "00";
-  const d = parts.find(p => p.type === "day")?.value ?? "00";
+  const y = parts.find((p) => p.type === "year")?.value ?? "0000";
+  const m = parts.find((p) => p.type === "month")?.value ?? "00";
+  const d = parts.find((p) => p.type === "day")?.value ?? "00";
   return { y, m, d, ymd: `${y}${m}${d}` };
 }
+function parseIntOr(v, d) {
+  const n = parseInt(String(v), 10);
+  return Number.isFinite(n) ? n : d;
+}
 
-// === PUBLIC: place order (no token) ===
+// Barebones date-range helpers (UTC-based; good enough for now)
+function startEndForScope(scope, dateStr) {
+  // dateStr: "YYYY-MM-DD" (UTC date)
+  // Returns { start: Date, end: Date }
+  const date = dateStr ? new Date(`${dateStr}T00:00:00.000Z`) : new Date();
+  const start = new Date(date);
+  let end;
+
+  if (scope === "week") {
+    // ISO week: Monday start (approx using UTC)
+    const day = start.getUTCDay() || 7; // 1..7
+    start.setUTCDate(start.getUTCDate() - (day - 1));
+    start.setUTCHours(0, 0, 0, 0);
+    end = new Date(start);
+    end.setUTCDate(end.getUTCDate() + 7);
+    end.setUTCHours(0, 0, 0, 0);
+    end = new Date(end.getTime() - 1);
+  } else if (scope === "month") {
+    start.setUTCDate(1);
+    start.setUTCHours(0, 0, 0, 0);
+    end = new Date(start);
+    end.setUTCMonth(end.getUTCMonth() + 1);
+    end.setUTCHours(0, 0, 0, 0);
+    end = new Date(end.getTime() - 1);
+  } else {
+    // day (default)
+    start.setUTCHours(0, 0, 0, 0);
+    end = new Date(start);
+    end.setUTCDate(end.getUTCDate() + 1);
+    end.setUTCHours(0, 0, 0, 0);
+    end = new Date(end.getTime() - 1);
+  }
+  return { start, end };
+}
+
+// ---------- PUBLIC: place order (no token) ----------
 export const createOrder = async (req, res) => {
   try {
     const {
@@ -284,7 +326,7 @@ export const createOrder = async (req, res) => {
       currency,
       customer,
       items,
-      pricing,      // must be provided by client for now
+      pricing, // must be provided by client for now
       remarks,
       source = "customer_view",
     } = req.body || {};
@@ -302,8 +344,8 @@ export const createOrder = async (req, res) => {
     const tz = branch.timeZone || "UTC";
     const { y, m, d, ymd } = tzParts(tz);
 
-    // per-day small token
-    const tokenNumber = await nextTokenForDay(vendorId, branch.branchId, ymd);
+    // per-day small token (per branch)
+    const tokenNumber = await nextTokenForDay(ymd, branch.branchId); // <— NOTE: (ymd, branchId)
 
     // per-day unique order number: YYYYMMDD + v2 + b5 + seq(7)
     const v2 = vendorDigits2(vendorId);
@@ -320,7 +362,7 @@ export const createOrder = async (req, res) => {
         phone: customer?.phone || null,
       },
       items,
-      pricing, // optional: re-calc & verify
+      pricing, // (optionally you can recompute & validate here)
       remarks: remarks || null,
       source,
       status: "Pending",
@@ -329,6 +371,7 @@ export const createOrder = async (req, res) => {
 
     const MAX_RETRIES = 3;
     let lastErr = null;
+
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
       const seq = await nextSeqByKey(counterKey); // 1,2,3...
       const orderNumber = `${y}${m}${d}${v2}${b5}${leftPad(seq, 7)}`;
@@ -344,8 +387,9 @@ export const createOrder = async (req, res) => {
           createdAt: created.createdAt,
         });
       } catch (e) {
+        // handle duplicate orderNumber (rare under concurrency)
         if (e && e.code === 11000 && e.keyPattern && e.keyPattern.orderNumber) {
-          lastErr = e; // duplicate orderNumber — retry
+          lastErr = e;
           continue;
         }
         throw e;
@@ -362,8 +406,129 @@ export const createOrder = async (req, res) => {
   }
 };
 
-// Optional: if somewhere else still imports placePublicOrder, keep a backward-compatible alias:
+// Keep backward compatibility if anything still imports this name
 export const placePublicOrder = createOrder;
+
+// ---------- PROTECTED: list + summary (Bearer token) ----------
+export const getOrders = async (req, res) => {
+  try {
+    // 1) Auth
+    const h = req.headers?.authorization || "";
+    const m = /^Bearer\s+(.+)$/i.exec(h);
+    const token = m ? m[1] : null;
+    if (!token) return res.status(401).json({ error: "Unauthorized - No token provided" });
+
+    const decoded = await admin.auth().verifyIdToken(token);
+    const userId = decoded.uid;
+
+    // Resolve vendor from user
+    const vendor = await Vendor.findOne({ userId }).lean();
+    if (!vendor) return res.status(403).json({ error: "No vendor associated with this account" });
+
+    // 2) Query params
+    const vendorIdParam = (req.query.vendor || "").toString().trim();
+    const branchIdParam = (req.query.branch || "").toString().trim();
+    const statusParam = (req.query.status || "").toString().trim();
+    const scope = (req.query.scope || "day").toString().trim().toLowerCase(); // day|week|month
+    const dateStr = (req.query.date || "").toString().trim(); // YYYY-MM-DD (UTC)
+    const page = Math.max(1, parseIntOr(req.query.page, 1));
+    const limit = Math.min(100, Math.max(1, parseIntOr(req.query.limit, 20)));
+
+    // Enforce vendor ownership
+    const vendorId = vendorIdParam && vendorIdParam === vendor.vendorId
+      ? vendorIdParam
+      : vendor.vendorId;
+
+    // Optional: if branch query provided, validate it belongs to this vendor
+    let tz = "UTC";
+    if (branchIdParam) {
+      const branch = await Branch.findOne({ branchId: branchIdParam }).lean();
+      if (!branch) return res.status(404).json({ error: "Branch not found" });
+      if (branch.vendorId !== vendorId) {
+        return res.status(403).json({ error: "Branch does not belong to your vendor" });
+      }
+      tz = branch.timeZone || "UTC";
+    }
+
+    // 3) Date range (UTC-based; simple and predictable)
+    const { start, end } = startEndForScope(scope, dateStr);
+
+    // 4) Build query
+    const q = {
+      vendorId,
+      createdAt: { $gte: start, $lte: end },
+    };
+    if (branchIdParam) q.branchId = branchIdParam;
+    if (statusParam) q.status = statusParam;
+
+    // 5) Count + list (paged)
+    const total = await Order.countDocuments(q);
+    const totalPages = Math.max(1, Math.ceil(total / limit));
+    const items = await Order.find(q)
+      .sort({ createdAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(limit)
+      .lean();
+
+    // 6) Summary
+    // byStatus
+    const byStatusAgg = await Order.aggregate([
+      { $match: q },
+      {
+        $group: {
+          _id: "$status",
+          count: { $sum: 1 },
+          total: { $sum: "$pricing.grandTotal" },
+        },
+      },
+      { $sort: { _id: 1 } },
+    ]);
+
+    const byStatus = byStatusAgg.map((g) => ({
+      status: g._id,
+      count: g.count,
+      total: Number(g.total || 0),
+    }));
+
+    const grandTotal = byStatus.reduce((s, x) => s + Number(x.total || 0), 0);
+
+    // tokens (only meaningful for daily scope; otherwise null)
+    let tokens = { first: null, last: null };
+    if (scope === "day") {
+      const firstTokenDoc = await Order.find(q).sort({ tokenNumber: 1 }).limit(1).lean();
+      const lastTokenDoc = await Order.find(q).sort({ tokenNumber: -1 }).limit(1).lean();
+      tokens = {
+        first: firstTokenDoc[0]?.tokenNumber ?? null,
+        last: lastTokenDoc[0]?.tokenNumber ?? null,
+      };
+    }
+
+    return res.status(200).json({
+      dateRange: {
+        scope,
+        date: dateStr || null,
+        startISO: start.toISOString(),
+        endISO: end.toISOString(),
+        timeZone: tz,
+      },
+      vendorId,
+      branchId: branchIdParam || null,
+      page,
+      limit,
+      total,
+      totalPages,
+      ordersCount: total,
+      grandTotal: Number(grandTotal || 0),
+      tokens,
+      byStatus,
+      items,
+    });
+  } catch (err) {
+    console.error("getOrders error:", err);
+    return res.status(500).json({ error: err.message || "Server error" });
+  }
+};
+
 
 
 
