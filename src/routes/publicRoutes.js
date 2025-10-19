@@ -1,9 +1,9 @@
-// // src/routes/publicRoutes.js
 // import express from "express";
 // import {
 //   getPublicMenu,
 //   getPublicSectionItems,
 // } from "../controllers/publicMenuController.js";
+// import { createOrder } from "../controllers/orderController.js";
 
 // const router = express.Router();
 
@@ -11,8 +11,8 @@
 // router.get("/menu/items", getPublicSectionItems);
 // router.post("/orders", createOrder);
 
-
 // export default router;
+// src/routes/publicRoutes.js
 // src/routes/publicRoutes.js
 import express from "express";
 import {
@@ -23,8 +23,12 @@ import { createOrder } from "../controllers/orderController.js";
 
 const router = express.Router();
 
+// Public menu (no auth)
 router.get("/menu", getPublicMenu);
 router.get("/menu/items", getPublicSectionItems);
+
+// Public order placement (no auth)
 router.post("/orders", createOrder);
 
 export default router;
+

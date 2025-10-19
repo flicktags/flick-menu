@@ -8,6 +8,8 @@ import userRouter from "./routes/user.js"
 import menuItemRoutes from "./routes/menuItemRoutes.js";
 import QrCodeRouter from "./routes/qrRoutes.js";
 import publicRoutes from "./routes/publicRoutes.js";
+import ordersRoutes from "./routes/ordersRoutes.js";
+
 
 const app = express();
 
@@ -25,6 +27,8 @@ app.use('/api/user', userRouter);
 app.use("/api/menu", menuItemRoutes);
 app.use("/api/qrcode", QrCodeRouter);
 app.use("/api/public", publicRoutes);
+app.use("/api/orders", ordersRoutes);
+
 
 
 
