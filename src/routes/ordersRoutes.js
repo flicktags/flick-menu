@@ -25,10 +25,10 @@ import { getOrders } from "../controllers/orderController.js";
 
 const router = express.Router();
 
-// Protected vendor/admin orders API (summary + list)
+// Protected vendor/admin orders API (summary + list by day)
 router.get("/", getOrders);
 
-// Optional compatibility path (if you were calling /api/orders/summary)
+// Optional compatibility path (e.g., /api/orders/summary)
 router.get("/summary", getOrders);
 
 export default router;

@@ -1,4 +1,5 @@
 // src/routes/publicRoutes.js
+// src/routes/publicRoutes.js
 import express from "express";
 import {
   getPublicMenu,
@@ -15,6 +16,7 @@ router.get("/menu/items", getPublicSectionItems);
 router.post("/orders", createOrder);
 
 export default router;
+
 
 // src/routes/publicRoutes.js
 // src/routes/publicRoutes.js

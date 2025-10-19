@@ -27,6 +27,7 @@
 // src/models/Counter.js
 // src/models/Counter.js
 // src/models/Counter.js
+// src/models/Counter.js
 import mongoose from "mongoose";
 
 const CounterSchema = new mongoose.Schema(
@@ -39,10 +40,8 @@ const CounterSchema = new mongoose.Schema(
 );
 
 // Reuse compiled model to avoid OverwriteModelError
-const Counter =
-  mongoose.models.Counter || mongoose.model("Counter", CounterSchema);
+const Counter = mongoose.models.Counter || mongoose.model("Counter", CounterSchema);
 
-/** Generic incrementer for a given counter key. Returns next integer (starting at 1). */
 export async function nextSeq(name) {
   const doc = await Counter.findOneAndUpdate(
     { name },
@@ -51,22 +50,16 @@ export async function nextSeq(name) {
   ).lean();
   return doc.seq;
 }
-
-/** Alias used by controllers for clarity. */
 export async function nextSeqByKey(key) {
   return nextSeq(key);
 }
-
-/**
- * Daily token per branch.
- * Example usage: nextTokenForDay("20251019", "BR-000004") -> 1, 2, 3 ...
- * Resets naturally because the date is part of the key.
- */
+// Still available if you need it elsewhere
 export async function nextTokenForDay(ymd, branchBusinessId) {
   const key = `token:${ymd}:${branchBusinessId}`;
   return nextSeq(key);
 }
 
 export default Counter;
+
 
 
