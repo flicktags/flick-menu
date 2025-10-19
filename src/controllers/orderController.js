@@ -241,6 +241,7 @@
 
 // src/controllers/orderController.js
 // src/controllers/orderController.js
+// src/controllers/orderController.js
 import admin from "../config/firebase.js";
 import Vendor from "../models/Vendor.js";
 import Branch from "../models/Branch.js";
@@ -281,17 +282,12 @@ function parseIntOr(v, d) {
   const n = parseInt(String(v), 10);
   return Number.isFinite(n) ? n : d;
 }
-
-// Barebones date-range helpers (UTC-based; good enough for now)
 function startEndForScope(scope, dateStr) {
-  // dateStr: "YYYY-MM-DD" (UTC date)
-  // Returns { start: Date, end: Date }
   const date = dateStr ? new Date(`${dateStr}T00:00:00.000Z`) : new Date();
   const start = new Date(date);
   let end;
 
   if (scope === "week") {
-    // ISO week: Monday start (approx using UTC)
     const day = start.getUTCDay() || 7; // 1..7
     start.setUTCDate(start.getUTCDate() - (day - 1));
     start.setUTCHours(0, 0, 0, 0);
@@ -307,7 +303,6 @@ function startEndForScope(scope, dateStr) {
     end.setUTCHours(0, 0, 0, 0);
     end = new Date(end.getTime() - 1);
   } else {
-    // day (default)
     start.setUTCHours(0, 0, 0, 0);
     end = new Date(start);
     end.setUTCDate(end.getUTCDate() + 1);
@@ -344,10 +339,10 @@ export const createOrder = async (req, res) => {
     const tz = branch.timeZone || "UTC";
     const { y, m, d, ymd } = tzParts(tz);
 
-    // per-day small token (per branch)
-    const tokenNumber = await nextTokenForDay(ymd, branch.branchId); // <— NOTE: (ymd, branchId)
+    // Per-day small token (per branch)
+    const tokenNumber = await nextTokenForDay(ymd, branch.branchId); // <-- use local variable in response
 
-    // per-day unique order number: YYYYMMDD + v2 + b5 + seq(7)
+    // Per-day unique order number: YYYYMMDD + v2 + b5 + seq(7)
     const v2 = vendorDigits2(vendorId);
     const b5 = branchDigits5(branch.branchId);
     const counterKey = `orders:daily:${vendorId}:${branch.branchId}:${ymd}`;
@@ -362,11 +357,11 @@ export const createOrder = async (req, res) => {
         phone: customer?.phone || null,
       },
       items,
-      pricing, // (optionally you can recompute & validate here)
+      pricing, // (you can re-check totals server-side later)
       remarks: remarks || null,
       source,
       status: "Pending",
-      tokenNumber,
+      tokenNumber, // <-- will be saved if Order schema has this field
     };
 
     const MAX_RETRIES = 3;
@@ -378,19 +373,31 @@ export const createOrder = async (req, res) => {
 
       try {
         const created = await Order.create({ ...baseDoc, orderNumber });
+
+        // Build a full order payload for the client
         return res.status(201).json({
           message: "Order placed",
-          orderId: String(created._id),
-          orderNumber: created.orderNumber,
-          tokenNumber: created.tokenNumber,
-          status: created.status,
-          createdAt: created.createdAt,
+          order: {
+            id: String(created._id),
+            orderNumber,           // from local var (guaranteed)
+            tokenNumber,           // from local var (always present)
+            vendorId,
+            branchId: branch.branchId,
+            currency: baseDoc.currency,
+            status: created.status,
+            qr: baseDoc.qr,
+            customer: baseDoc.customer,
+            items: baseDoc.items,
+            pricing: baseDoc.pricing,
+            remarks: baseDoc.remarks,
+            source: baseDoc.source,
+            createdAt: created.createdAt,
+          },
         });
       } catch (e) {
-        // handle duplicate orderNumber (rare under concurrency)
         if (e && e.code === 11000 && e.keyPattern && e.keyPattern.orderNumber) {
           lastErr = e;
-          continue;
+          continue; // try a new seq
         }
         throw e;
       }
@@ -406,7 +413,7 @@ export const createOrder = async (req, res) => {
   }
 };
 
-// Keep backward compatibility if anything still imports this name
+// Back-compat alias if referenced elsewhere
 export const placePublicOrder = createOrder;
 
 // ---------- PROTECTED: list + summary (Bearer token) ----------
@@ -439,7 +446,7 @@ export const getOrders = async (req, res) => {
       ? vendorIdParam
       : vendor.vendorId;
 
-    // Optional: if branch query provided, validate it belongs to this vendor
+    // Branch validation (optional)
     let tz = "UTC";
     if (branchIdParam) {
       const branch = await Branch.findOne({ branchId: branchIdParam }).lean();
@@ -450,18 +457,15 @@ export const getOrders = async (req, res) => {
       tz = branch.timeZone || "UTC";
     }
 
-    // 3) Date range (UTC-based; simple and predictable)
+    // 3) Date range (UTC)
     const { start, end } = startEndForScope(scope, dateStr);
 
-    // 4) Build query
-    const q = {
-      vendorId,
-      createdAt: { $gte: start, $lte: end },
-    };
+    // 4) Query
+    const q = { vendorId, createdAt: { $gte: start, $lte: end } };
     if (branchIdParam) q.branchId = branchIdParam;
     if (statusParam) q.status = statusParam;
 
-    // 5) Count + list (paged)
+    // 5) Count + list
     const total = await Order.countDocuments(q);
     const totalPages = Math.max(1, Math.ceil(total / limit));
     const items = await Order.find(q)
@@ -471,16 +475,9 @@ export const getOrders = async (req, res) => {
       .lean();
 
     // 6) Summary
-    // byStatus
     const byStatusAgg = await Order.aggregate([
       { $match: q },
-      {
-        $group: {
-          _id: "$status",
-          count: { $sum: 1 },
-          total: { $sum: "$pricing.grandTotal" },
-        },
-      },
+      { $group: { _id: "$status", count: { $sum: 1 }, total: { $sum: "$pricing.grandTotal" } } },
       { $sort: { _id: 1 } },
     ]);
 
@@ -489,10 +486,8 @@ export const getOrders = async (req, res) => {
       count: g.count,
       total: Number(g.total || 0),
     }));
-
     const grandTotal = byStatus.reduce((s, x) => s + Number(x.total || 0), 0);
 
-    // tokens (only meaningful for daily scope; otherwise null)
     let tokens = { first: null, last: null };
     if (scope === "day") {
       const firstTokenDoc = await Order.find(q).sort({ tokenNumber: 1 }).limit(1).lean();
@@ -528,6 +523,7 @@ export const getOrders = async (req, res) => {
     return res.status(500).json({ error: err.message || "Server error" });
   }
 };
+
 
 
 
