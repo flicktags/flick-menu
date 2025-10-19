@@ -250,6 +250,9 @@
 
 
 // src/controllers/orderController.js
+// src/controllers/orderController.js
+import admin from "../config/firebase.js";
+import Vendor from "../models/Vendor.js";
 import Branch from "../models/Branch.js";
 import Order from "../models/Order.js";
 import { nextSeqByKey } from "../models/Counter.js";
@@ -285,7 +288,55 @@ function tzParts(tz = "UTC") {
   return { y, m, d, ymd: `${y}${m}${d}` };
 }
 
+// ---- date range helpers for GET /api/orders ----
+function toMidnightUTC(dateStr) {
+  return new Date(`${dateStr}T00:00:00.000Z`);
+}
+function addDays(d, n) {
+  const x = new Date(d.getTime());
+  x.setUTCDate(x.getUTCDate() + n);
+  return x;
+}
+function firstOfMonthUTC(dateStr) {
+  const [y, m] = dateStr.split("-").map(Number);
+  return new Date(Date.UTC(y, m - 1, 1, 0, 0, 0, 0));
+}
+function nextMonthUTC(d) {
+  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1));
+}
+function todayYMDUTC() {
+  const t = new Date();
+  const y = t.getUTCFullYear();
+  const m = String(t.getUTCMonth() + 1).padStart(2, "0");
+  const d = String(t.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${d}`;
+}
+function resolveRange({ period, date, dateFrom, dateTo }) {
+  // Explicit custom range wins
+  if (dateFrom || dateTo) {
+    const from = dateFrom ? toMidnightUTC(dateFrom) : toMidnightUTC(todayYMDUTC());
+    const to = dateTo ? toMidnightUTC(dateTo) : addDays(toMidnightUTC(todayYMDUTC()), 1);
+    return { from, to, period: "custom", dateBase: null };
+  }
+  const base = date || todayYMDUTC();
+  if (period === "week") {
+    const start = toMidnightUTC(base);
+    const end = addDays(start, 7);
+    return { from: start, to: end, period: "week", dateBase: base };
+  }
+  if (period === "month") {
+    const start = firstOfMonthUTC(base);
+    const end = nextMonthUTC(start);
+    return { from: start, to: end, period: "month", dateBase: base };
+  }
+  // default: day
+  const start = toMidnightUTC(base);
+  const end = addDays(start, 1);
+  return { from: start, to: end, period: "day", dateBase: base };
+}
+
 // ============ PUBLIC: place order (no token) ============
+// (UNCHANGED — copied exactly from your message)
 export const createOrder = async (req, res) => {
   try {
     const {
@@ -389,110 +440,170 @@ export const createOrder = async (req, res) => {
   }
 };
 
-// ============ PROTECTED/ADMIN: list + daily summary ============
-/**
- * GET /api/orders
- * Query:
- * - vendor: V000023 (recommended)
- * - branch: BR-000004 (optional)
- * - date: YYYY-MM-DD (optional; defaults to 'today' in tz)
- * - tz: IANA tz like "Asia/Bahrain" (optional; default "UTC")
- * - limit: number (default 200)
- *
- * Uses orderNumber prefix (YYYYMMDD) for day filtering, so no timezone math issues.
- */
+// ============ PROTECTED/ADMIN: list + summary ============
+// GET /api/orders
+// Headers: Authorization: Bearer <Firebase ID token>
+//
+// Query (all optional):
+// - branch=BR-000004  (limit to one branch; else all branches for vendor)
+// - status=Pending|Accepted|Completed|Cancelled
+// - sort=newest|oldest       (default newest)
+// - page=1&limit=20          (pagination; limit<=100)
+// - period=day|week|month    (default day)
+// - date=YYYY-MM-DD          (base date for period; default today UTC)
+// - dateFrom=YYYY-MM-DD&dateTo=YYYY-MM-DD (custom range; overrides period/date)
 export const getOrders = async (req, res) => {
   try {
-    const vendorId = (req.query.vendor || "").toString().trim();
-    const branchId = (req.query.branch || "").toString().trim();
-    const dateStr = (req.query.date || "").toString().trim(); // YYYY-MM-DD
-    const tz = (req.query.tz || "UTC").toString().trim();
-    const limit = Math.min(parseInt(req.query.limit || "200", 10) || 200, 1000);
+    // 1) Auth → vendor
+    const h = req.headers?.authorization || "";
+    const m = /^Bearer\s+(.+)$/i.exec(h);
+    const token = m ? m[1] : null;
+    if (!token) return res.status(401).json({ error: "Unauthorized - No token provided" });
 
-    if (!vendorId && !branchId) {
-      return res
-        .status(400)
-        .json({ error: "Provide at least vendor or branch in query" });
-    }
+    const decoded = await admin.auth().verifyIdToken(token);
+    const userId = decoded.uid;
 
-    // Resolve date to YYYYMMDD
-    let ymd;
-    if (dateStr) {
-      const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr);
-      if (!m) return res.status(400).json({ error: "Invalid date format (YYYY-MM-DD)" });
-      ymd = `${m[1]}${m[2]}${m[3]}`;
-    } else {
-      ymd = tzParts(tz).ymd;
-    }
+    const vendorDoc = await Vendor.findOne({ userId }).lean();
+    if (!vendorDoc) return res.status(403).json({ error: "No vendor associated with this account" });
+    const vendorId = vendorDoc.vendorId;
 
-    // Build query
-    const q = { orderNumber: new RegExp(`^${ymd}`) };
-    if (vendorId) q.vendorId = vendorId;
-    if (branchId) q.branchId = branchId;
-
-    const orders = await Order.find(q)
-      .sort({ createdAt: 1 })
-      .limit(limit)
-      .lean();
-
-    const ordersCount = orders.length;
-    const grandTotal = orders.reduce(
-      (acc, o) => acc + (Number(o?.pricing?.grandTotal) || 0),
-      0
-    );
-
-    let firstToken = null;
-    let lastToken = null;
-    if (ordersCount > 0) {
-      const tokens = orders
-        .map((o) => Number(o.tokenNumber) || 0)
-        .filter((n) => Number.isFinite(n) && n > 0);
-      if (tokens.length) {
-        firstToken = Math.min(...tokens);
-        lastToken = Math.max(...tokens);
-      }
-    }
-
-    const byStatusMap = new Map();
-    for (const o of orders) {
-      const s = (o.status || "Pending").toString();
-      byStatusMap.set(s, (byStatusMap.get(s) || 0) + 1);
-    }
-    const byStatus = Array.from(byStatusMap.entries()).map(([status, count]) => ({
+    // 2) Params
+    const {
+      branch: branchIdParam,
       status,
-      count,
+      sort = "newest",
+      page: pageRaw = "1",
+      limit: limitRaw = "20",
+      period,
+      date,
+      dateFrom,
+      dateTo,
+    } = req.query || {};
+
+    const page = Math.max(1, parseInt(pageRaw, 10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(limitRaw, 10) || 20));
+
+    const { from, to, period: usedPeriod, dateBase } = resolveRange({ period, date, dateFrom, dateTo });
+
+    // 3) Branch filter (optional) + pick a tz to report back
+    let branchIdFilter;
+    let timeZone = "UTC";
+    if (branchIdParam) {
+      const br = await Branch.findOne({ branchId: branchIdParam }).lean();
+      if (!br) return res.status(404).json({ error: "Branch not found" });
+      if (br.vendorId !== vendorId) return res.status(403).json({ error: "Branch does not belong to your vendor" });
+      branchIdFilter = br.branchId;
+      timeZone = br.timeZone || "UTC";
+    }
+
+    // 4) Build filter on createdAt range
+    const filter = {
+      vendorId,
+      createdAt: { $gte: from, $lt: to },
+      ...(branchIdFilter ? { branchId: branchIdFilter } : {}),
+      ...(status ? { status } : {}),
+    };
+
+    // 5) Summary aggregations
+    const [summary] = await Order.aggregate([
+      { $match: filter },
+      {
+        $group: {
+          _id: null,
+          count: { $sum: 1 },
+          subtotal: { $sum: { $ifNull: ["$pricing.subtotal", 0] } },
+          serviceCharge: { $sum: { $ifNull: ["$pricing.serviceChargeAmount", 0] } },
+          vat: { $sum: { $ifNull: ["$pricing.vatAmount", 0] } },
+          grand: { $sum: { $ifNull: ["$pricing.grandTotal", 0] } },
+        },
+      },
+    ]);
+
+    const byStatus = await Order.aggregate([
+      { $match: filter },
+      {
+        $group: {
+          _id: "$status",
+          count: { $sum: 1 },
+          grandTotal: { $sum: { $ifNull: ["$pricing.grandTotal", 0] } },
+        },
+      },
+      { $project: { _id: 0, status: "$_id", count: 1, grandTotal: 1 } },
+      { $sort: { status: 1 } },
+    ]);
+
+    const tokenAgg = await Order.aggregate([
+      { $match: { ...filter, tokenNumber: { $type: "number" } } },
+      {
+        $group: {
+          _id: null,
+          first: { $min: "$tokenNumber" },
+          last: { $max: "$tokenNumber" },
+        },
+      },
+    ]);
+    const tokens = tokenAgg?.[0]
+      ? { first: tokenAgg[0].first, last: tokenAgg[0].last }
+      : { first: null, last: null };
+
+    // 6) List (paginated)
+    const sortSpec = sort === "oldest" ? { createdAt: 1, _id: 1 } : { createdAt: -1, _id: -1 };
+    const total = summary?.count || 0;
+    const totalPages = Math.max(1, Math.ceil(total / limit));
+    const skip = (page - 1) * limit;
+
+    const orders = await Order.find(filter).sort(sortSpec).skip(skip).limit(limit).lean();
+
+    const list = orders.map((o) => ({
+      id: String(o._id),
+      orderNumber: o.orderNumber,
+      tokenNumber: o.tokenNumber ?? null,
+      vendorId: o.vendorId,
+      branchId: o.branchId,
+      currency: o.currency,
+      status: o.status || "Pending",
+      createdAt: o.createdAt,
+      qr: o.qr || null,
+      customer: o.customer || null,
+      pricing: o.pricing || null,
+      items: o.items || [],
+      remarks: o.remarks ?? null,
+      source: o.source ?? null,
     }));
 
     return res.status(200).json({
-      date: `${ymd.slice(0, 4)}-${ymd.slice(4, 6)}-${ymd.slice(6, 8)}`,
-      timeZone: tz,
-      vendorId: vendorId || null,
-      branchId: branchId || null,
-      ordersCount,
-      grandTotal,
-      tokens: { first: firstToken, last: lastToken },
+      vendorId,
+      branchId: branchIdFilter || null,
+      range: {
+        from,
+        to,
+        timeZone,
+        period: usedPeriod,
+        dateBase,
+      },
+      counts: { orders: total },
+      totals: {
+        subtotal: summary?.subtotal || 0,
+        serviceCharge: summary?.serviceCharge || 0,
+        vat: summary?.vat || 0,
+        grand: summary?.grand || 0,
+      },
+      tokens,
       byStatus,
-      orders: orders.map((o) => ({
-        id: String(o._id),
-        orderNumber: o.orderNumber,
-        tokenNumber: o.tokenNumber ?? null,
-        status: o.status || "Pending",
-        branchId: o.branchId,
-        vendorId: o.vendorId,
-        grandTotal: Number(o?.pricing?.grandTotal) || 0,
-        createdAt: o.createdAt,
-        customer: {
-          name: o?.customer?.name || "",
-          phone: o?.customer?.phone || null,
-        },
-        qr: o.qr || null,
-      })),
+      pagination: {
+        page,
+        limit,
+        total,
+        totalPages,
+      },
+      orders: list,
     });
   } catch (err) {
     console.error("getOrders error:", err);
     return res.status(500).json({ error: err.message || "Server error" });
   }
 };
+
 
 
 
