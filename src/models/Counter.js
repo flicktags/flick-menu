@@ -25,45 +25,52 @@
 
 // export default Counter;
 // src/models/Counter.js
+// src/models/Counter.js
 import mongoose from "mongoose";
 
 const CounterSchema = new mongoose.Schema(
   {
-    // Single source of truth per counter key
+    // Unique counter key, e.g. "qrcode", "orderNo:20251019:23:00004", "token:20251019:BR-000004"
     name: { type: String, unique: true, required: true, index: true },
     seq: { type: Number, default: 0 },
   },
-  { timestamps: false }
+  { timestamps: false, versionKey: false }
 );
 
-// Reuse compiled model (prevents OverwriteModelError)
+// Reuse compiled model to avoid OverwriteModelError in serverless/hot-reload envs
 const Counter =
   mongoose.models.Counter || mongoose.model("Counter", CounterSchema);
 
-/** Generic monotonic counter */
+/**
+ * Generic incrementer for a given counter name.
+ * Creates the document on first use and starts from 1.
+ */
 export async function nextSeq(name) {
   const doc = await Counter.findOneAndUpdate(
     { name },
     { $inc: { seq: 1 } },
-    { new: true, upsert: true, setDefaultsOnInsert: true }
+    { new: true, upsert: true }
   ).lean();
   return doc.seq;
 }
 
-/** Build the per-day key for a vendor+branch */
-export function dailyKeyForOrder(vendorId, branchId, ymd /* YYYY-MM-DD */) {
-  return `orderDaily:${vendorId}:${branchId}:${ymd}`;
+/**
+ * Alias used by order controller for clarity.
+ * Example key: "orderNo:20251019:23:00004"
+ */
+export async function nextSeqByKey(key) {
+  return nextSeq(key);
 }
 
-/** Per-day counter for orders (resets each calendar day for vendor+branch) */
-export async function nextDailyOrderSeq(vendorId, branchId, ymd) {
-  const name = dailyKeyForOrder(vendorId, branchId, ymd);
-  const doc = await Counter.findOneAndUpdate(
-    { name },
-    { $inc: { seq: 1 } },
-    { new: true, upsert: true, setDefaultsOnInsert: true }
-  ).lean();
-  return doc.seq;
+/**
+ * Daily token per branch.
+ * Example usage: nextTokenForDay("20251019", "BR-000004") -> 1, 2, 3 ...
+ * Resets naturally because the date is part of the key.
+ */
+export async function nextTokenForDay(ymd, branchBusinessId) {
+  const key = `token:${ymd}:${branchBusinessId}`;
+  return nextSeq(key);
 }
 
 export default Counter;
+
