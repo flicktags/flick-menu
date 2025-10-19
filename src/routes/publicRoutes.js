@@ -23,11 +23,10 @@ import { createOrder } from "../controllers/orderController.js";
 
 const router = express.Router();
 
-// Public menu (no auth)
 router.get("/menu", getPublicMenu);
 router.get("/menu/items", getPublicSectionItems);
 
-// Public order placement (no auth)
+// Public order placement (no token)
 router.post("/orders", createOrder);
 
 export default router;

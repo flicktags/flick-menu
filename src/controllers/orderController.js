@@ -233,292 +233,337 @@
 // src/controllers/orderController.js
 // src/controllers/orderController.js
 // src/controllers/orderController.js
-import Branch from "../models/Branch.js";
+// src/controllers/orderController.js
+// src/controllers/orderController.js
+import admin from "../config/firebase.js";
+import Vendor from "../models/Vendor.js";
+import Branch from "../models/Branch.js"; // used to derive vendorId from branchId for orderNumber
 import Order from "../models/Order.js";
-import { nextDailyOrderSeq } from "../models/Counter.js";
+import { nextSeqByKey, nextTokenForDay } from "../models/Counter.js";
 
-/* -------------------------- helpers: formatting -------------------------- */
-
-function _digitsOnly(s) {
-  return String(s || "").replace(/\D/g, "");
-}
-function _vendorDigits(vendorId) {
-  // "V000023" -> "23" (drop leading zeros)
-  const d = _digitsOnly(vendorId);
-  const n = parseInt(d || "0", 10);
-  return String(n);
-}
-function _branchDigits5(branchId) {
-  // "BR-000004" -> "00004"
-  const d = _digitsOnly(branchId);
-  return d.slice(-5).padStart(5, "0");
-}
-function _pad(num, width) {
-  return String(num).padStart(width, "0");
-}
-function _yyyymmddUTC(date) {
-  // Use UTC date for stability
-  const iso = date.toISOString().slice(0, 10); // YYYY-MM-DD
-  return iso.replace(/-/g, "");
-}
-function _round3(x) {
-  return Math.round((x + Number.EPSILON) * 1000) / 1000;
-}
-
-/** Build the long order number:
- *   YYYYMMDD + vendorIdDigits + branchDigits(5) + dailySeq(7)
- *   e.g. "2025101923000040000001"
- */
-function buildOrderNumber({ date, vendorId, branchId, dailySeq }) {
-  const ymd = _yyyymmddUTC(date);
-  const vend = _vendorDigits(vendorId);
-  const br = _branchDigits5(branchId);
-  const seq7 = _pad(dailySeq, 7);
-  return `${ymd}${vend}${br}${seq7}`;
-}
-
-/* -------------------------- helpers: pricing ----------------------------- */
-function computePricing({ items, vatPercent = 0, servicePercent = 0 }) {
-  const subtotal = _round3(
-    items.reduce((sum, it) => {
-      const qty = Number(it.quantity || 0);
-      const unit = Number(it.unitBasePrice || 0);
-      const addons = Array.isArray(it.addons) ? it.addons : [];
-      const addonsUnit = addons.reduce(
-        (a, ad) => a + Number(ad?.price || 0),
-        0
-      );
-      const unitTotal = unit + addonsUnit;
-      return sum + unitTotal * qty;
-    }, 0)
-  );
-
-  const serviceChargeAmount = _round3((subtotal * Number(servicePercent)) / 100);
-  const vatBase = _round3(subtotal + serviceChargeAmount);
-  const vatAmount = _round3((vatBase * Number(vatPercent)) / 100);
-  const grandTotal = _round3(subtotal + serviceChargeAmount + vatAmount);
-
-  return {
-    subtotal,
-    serviceChargePercent: Number(servicePercent),
-    serviceChargeAmount,
-    vatPercent: Number(vatPercent),
-    vatAmount,
-    grandTotal,
-  };
-}
-
-/* ------------------------------- createOrder ----------------------------- */
 /**
- * POST /api/public/orders
+ * Helpers
+ */
+function digits(str = "") {
+  const m = String(str || "").match(/\d+/);
+  return m ? m[0] : "";
+}
+
+function padLeft(value, len) {
+  const s = String(value ?? "");
+  if (s.length >= len) return s.slice(-len);
+  return s.padStart(len, "0");
+}
+
+function todayUTC() {
+  const now = new Date();
+  const y = now.getUTCFullYear();
+  const m = now.getUTCMonth();
+  const d = now.getUTCDate();
+  return new Date(Date.UTC(y, m, d, 0, 0, 0, 0));
+}
+
+function rangeForPeriod({ period = "day", date, from, to }) {
+  // All UTC boundaries
+  if (period === "range" && from && to) {
+    const start = new Date(from);
+    const end = new Date(to);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+      throw new Error("Invalid from/to date");
+    }
+    // make end exclusive
+    const endExclusive = new Date(end.getTime());
+    return { start, end: endExclusive };
+  }
+
+  // base date = provided date or today
+  const base = date ? new Date(`${date}T00:00:00.000Z`) : todayUTC();
+  if (Number.isNaN(base.getTime())) throw new Error("Invalid date");
+
+  if (period === "week") {
+    // ISO week: start from base's UTC Monday
+    const day = base.getUTCDay() || 7; // 1..7 (Mon..Sun)
+    const start = new Date(base);
+    start.setUTCDate(base.getUTCDate() - (day - 1));
+    const end = new Date(start);
+    end.setUTCDate(start.getUTCDate() + 7);
+    return { start, end };
+  }
+
+  if (period === "month") {
+    const start = new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth(), 1));
+    const end = new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth() + 1, 1));
+    return { start, end };
+  }
+
+  // default: day
+  const start = new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth(), base.getUTCDate()));
+  const end = new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth(), base.getUTCDate() + 1));
+  return { start, end };
+}
+
+/**
+ * Build the formatted order number:
+ * YYYYMMDD + vendorDigits + branchDigits(5) + counter(7)
+ * - vendorDigits: digits from vendorId without leading zeros (e.g., V000023 -> "23")
+ * - branchDigits(5): last 5 digits of the branch id digits (BR-000004 -> "00004")
+ * - counter(7): daily incremental per (date + vendor + branch)
+ */
+async function buildOrderNumber({ branchBusinessId, vendorId }) {
+  const now = new Date();
+  const ymd =
+    String(now.getUTCFullYear()) +
+    padLeft(now.getUTCMonth() + 1, 2) +
+    padLeft(now.getUTCDate(), 2);
+
+  const vDigitsRaw = digits(vendorId); // e.g. "000023"
+  const vNum = parseInt(vDigitsRaw || "0", 10); // 23
+  const vendorDigits = String(Number.isFinite(vNum) ? vNum : 0); // "23"
+
+  const bDigitsFull = digits(branchBusinessId || ""); // "000004"
+  const branchDigits5 = padLeft(bDigitsFull, 5); // "00004" (last 5 digits)
+
+  // Daily counter key per (date + vendor + branch)
+  const orderCounter = await nextSeqByKey(
+    `orderNo:${ymd}:${vendorDigits}:${branchDigits5}`
+  );
+  const counter7 = padLeft(orderCounter, 7);
+
+  return `${ymd}${vendorDigits}${branchDigits5}${counter7}`;
+}
+
+/**
+ * Public: Create an order (no auth).
+ * Body matches the customer view payload.
  */
 export const createOrder = async (req, res) => {
   try {
-    const branchId = String(req.body?.branch || "").trim();
-    const qr = req.body?.qr || {};
-    const items = Array.isArray(req.body?.items) ? req.body.items : [];
-    const currency = String(req.body?.currency || "").trim();
-    const customer = req.body?.customer || {};
-    const remarks = req.body?.remarks || null;
-    const source = String(req.body?.source || "customer_view");
+    const {
+      branch,            // "BR-000004"
+      qr,                // { type, number, qrId }
+      currency,          // e.g. "BHD"
+      customer,          // { name, phone? }
+      items,             // array of line items (validated below)
+      pricing,           // { subtotal, serviceChargePercent, serviceChargeAmount, vatPercent, vatAmount, grandTotal }
+      remarks,           // optional
+      source = "customer_view",
+    } = req.body || {};
 
-    if (!branchId) {
-      return res.status(400).json({ error: 'Missing "branch" (e.g. "BR-000004")' });
+    if (!branch || typeof branch !== "string") {
+      return res.status(400).json({ error: 'Missing "branch" (business id like BR-000004)' });
     }
-    if (!items.length) {
-      return res.status(400).json({ error: "No items provided" });
+    if (!Array.isArray(items) || items.length === 0) {
+      return res.status(400).json({ error: "Order must include at least one item" });
+    }
+    if (!pricing || typeof pricing !== "object") {
+      return res.status(400).json({ error: "Missing pricing object" });
     }
 
-    const branch = await Branch.findOne({ branchId }).lean();
-    if (!branch) return res.status(404).json({ error: "Branch not found" });
+    // Look up branch to derive vendorId for order number + (optionally) timezone.
+    const branchDoc = await Branch.findOne({ branchId: branch }).lean();
+    if (!branchDoc) {
+      return res.status(404).json({ error: "Branch not found" });
+    }
+    const vendorId = branchDoc.vendorId;
 
-    const vendorId = branch.vendorId;
-    const vatPercent = Number(branch?.taxes?.vatPercentage || 0);
-    const servicePercent = Number(branch?.taxes?.serviceChargePercentage || 0);
-
-    const pricing = computePricing({ items, vatPercent, servicePercent });
-
-    // Daily token (UTC day) + long order number
-    const now = new Date();
-    const ymdKey = now.toISOString().slice(0, 10); // "YYYY-MM-DD" (UTC day)
-    const tokenNumber = await nextDailyOrderSeq(vendorId, branchId, ymdKey);
-
-    const orderNumber = buildOrderNumber({
-      date: now,
+    // Build order number + daily branch token
+    const orderNumber = await buildOrderNumber({
+      branchBusinessId: branch,
       vendorId,
-      branchId,
-      dailySeq: tokenNumber,
     });
 
+    const now = new Date();
+    const ymd =
+      String(now.getUTCFullYear()) +
+      padLeft(now.getUTCMonth() + 1, 2) +
+      padLeft(now.getUTCDate(), 2);
+
+    // daily token per (date + branch)
+    const token = await nextTokenForDay(ymd, branch);
+
+    // Normalize items minimally
+    const normalizedItems = items.map((it) => ({
+      itemId: String(it.itemId || ""),
+      nameEnglish: String(it.nameEnglish || ""),
+      nameArabic: String(it.nameArabic || ""),
+      imageUrl: typeof it.imageUrl === "string" ? it.imageUrl : "",
+      isSizedBased: Boolean(it.isSizedBased),
+      size: it.size ? {
+        label: String(it.size.label || ""),
+        price: typeof it.size.price === "number" ? it.size.price : null,
+      } : null,
+      addons: Array.isArray(it.addons) ? it.addons.map((a) => ({
+        id: String(a.id || a._id || ""),
+        label: String(a.label || a.nameEnglish || a.nameArabic || ""),
+        price: typeof a.price === "number" ? a.price : 0,
+      })) : [],
+      unitBasePrice: typeof it.unitBasePrice === "number" ? it.unitBasePrice : 0,
+      quantity: Number.isFinite(it.quantity) && it.quantity > 0 ? it.quantity : 1,
+      notes: typeof it.notes === "string" ? it.notes : "",
+      lineTotal: typeof it.lineTotal === "number" ? it.lineTotal : 0,
+    }));
+
     const orderDoc = await Order.create({
-      orderNumber,
-      tokenNumber, // short daily token visible to customer
-      status: "pending",
+      // FK-ish
+      vendorId,                 // from branch lookup
+      branchId: branch,         // store business id
 
-      branchId, // business code (BR-xxxxx)
-      vendorId,
-      currency: currency || branch.currency || "BHD",
+      // QR context if you want it stored
+      qr: qr || null,           // { type, number, qrId }
 
-      qr: {
-        type: String(qr?.type || "").toLowerCase(),
-        number: String(qr?.number || ""),
-        qrId: String(qr?.qrId || ""),
-      },
-
+      // Customer/Amounts
+      currency: currency || branchDoc.currency || "BHD",
       customer: {
-        name: (customer?.name || "").toString(),
-        phone: (customer?.phone || "").toString() || null,
+        name: customer?.name || "",
+        phone: customer?.phone || null,
+      },
+      items: normalizedItems,
+      pricing: {
+        subtotal: Number(pricing.subtotal || 0),
+        serviceChargePercent: Number(pricing.serviceChargePercent || 0),
+        serviceChargeAmount: Number(pricing.serviceChargeAmount || 0),
+        vatPercent: Number(pricing.vatPercent || 0),
+        vatAmount: Number(pricing.vatAmount || 0),
+        grandTotal: Number(pricing.grandTotal || 0),
       },
 
-      items: items.map((it) => ({
-        itemId: String(it?.itemId || ""),
-        nameEnglish: (it?.nameEnglish || "").toString(),
-        nameArabic: (it?.nameArabic || "").toString(),
-        imageUrl: (it?.imageUrl || "").toString(),
-        isSizedBased: it?.isSizedBased === true,
-        size: it?.size
-          ? {
-              label: (it.size.label || "").toString(),
-              price:
-                typeof it.size.price === "number"
-                  ? it.size.price
-                  : Number(it.size.price || 0),
-            }
-          : null,
-        addons: Array.isArray(it?.addons)
-          ? it.addons.map((ad) => ({
-              id: (ad?.id || ad?._id || "").toString(),
-              label: (ad?.label || ad?.nameEnglish || ad?.nameArabic || "").toString(),
-              price:
-                typeof ad?.price === "number" ? ad.price : Number(ad?.price || 0),
-            }))
-          : [],
-        unitBasePrice:
-          typeof it?.unitBasePrice === "number"
-            ? it.unitBasePrice
-            : Number(it?.unitBasePrice || 0),
-        quantity: Number(it?.quantity || 0),
-        notes: (it?.notes || "").toString(),
-      })),
+      // Identity
+      orderNumber,              // e.g., 2025101923000040000001
+      token,                    // small daily token per branch
+      tokenDate: ymd,           // helpful for day grouping
 
-      pricing,
-      taxesSnapshot: {
-        vatPercent,
-        serviceChargePercent: servicePercent,
-      },
-
-      remarks: remarks ? String(remarks) : null,
+      // Meta
+      remarks: typeof remarks === "string" ? remarks : null,
       source,
-      placedAt: now,
+      status: "pending",        // default status; update flow can advance it
+
+      // Timestamps
+      createdAt: new Date(),
+      updatedAt: new Date(),
     });
 
     return res.status(201).json({
       message: "Order placed",
-      orderNumber,
-      tokenNumber,
-      branchId,
-      vendorId,
-      pricing,
       orderId: orderDoc._id,
+      orderNumber: orderDoc.orderNumber,
+      token: orderDoc.token,
+      tokenDate: orderDoc.tokenDate,
       status: orderDoc.status,
-      placedAt: orderDoc.placedAt,
+      createdAt: orderDoc.createdAt,
     });
   } catch (err) {
     console.error("Create Order Error:", err);
-    return res.status(500).json({ error: err.message || "Server error" });
+    return res.status(500).json({ error: err.message });
   }
 };
 
-/* ------------------------------ getDailySummary -------------------------- */
 /**
- * GET /api/orders/summary?branch=BR-000004&date=YYYY-MM-DD
- * (Optional) vendor=V000023
+ * Protected: Get orders + summary (admin/vendor)
+ * Query:
+ *   period=day|week|month|range   (default: day)
+ *   date=YYYY-MM-DD               (base date for day/week/month)
+ *   from=YYYY-MM-DD&to=YYYY-MM-DD (when period=range)
+ *   branch=BR-000004              (optional filter)
+ *   page=1&limit=50               (paging)
  *
- * Uses UTC day boundaries to match how tokenNumber resets daily.
+ * Auth: Bearer <firebase-id-token>
+ * We resolve vendorId from token -> Vendor.userId.
  */
-export const getDailySummary = async (req, res) => {
+export const getOrders = async (req, res) => {
   try {
-    const branchId = String(req.query?.branch || "").trim();
-    const vendorIdQ = String(req.query?.vendor || "").trim();
-    const dateStr =
-      String(req.query?.date || "").trim() ||
-      new Date().toISOString().slice(0, 10); // "YYYY-MM-DD" (UTC)
+    // 1) Auth
+    const h = req.headers?.authorization || "";
+    const m = /^Bearer\s+(.+)$/i.exec(h);
+    const token = m ? m[1] : null;
+    if (!token) return res.status(401).json({ error: "Unauthorized - No token provided" });
+    const decoded = await admin.auth().verifyIdToken(token);
+    const userId = decoded.uid;
 
-    if (!branchId) {
-      return res.status(400).json({ error: 'Missing "branch" query (e.g. BR-000004)' });
-    }
+    const vendor = await Vendor.findOne({ userId }).lean();
+    if (!vendor) return res.status(403).json({ error: "No vendor associated with this account" });
+    const vendorId = vendor.vendorId;
 
-    const branch = await Branch.findOne({ branchId }).lean();
-    if (!branch) return res.status(404).json({ error: "Branch not found" });
+    // 2) Filters
+    const {
+      period = "day",
+      date, from, to,
+      branch,                      // BR-000xxx
+      page = "1",
+      limit = "50",
+      status                       // optional single status filter
+    } = req.query || {};
 
-    const vendorId = vendorIdQ || branch.vendorId;
+    const { start, end } = rangeForPeriod({ period, date, from, to });
 
-    // UTC day range
-    const start = new Date(`${dateStr}T00:00:00.000Z`);
-    const end = new Date(`${dateStr}T23:59:59.999Z`);
+    const pageNum = Math.max(1, parseInt(String(page), 10) || 1);
+    const limitNum = Math.min(200, Math.max(1, parseInt(String(limit), 10) || 50));
 
-    const pipeline = [
+    const q = {
+      vendorId,
+      createdAt: { $gte: start, $lt: end },
+    };
+    if (branch) q.branchId = String(branch);
+    if (status) q.status = String(status);
+
+    // 3) Summary (count + totals)
+    const summaryAgg = await Order.aggregate([
+      { $match: q },
       {
-        $match: {
-          branchId,
-          vendorId,
-          placedAt: { $gte: start, $lt: end },
+        $group: {
+          _id: null,
+          ordersCount: { $sum: 1 },
+          grandTotal: { $sum: "$pricing.grandTotal" },
+          firstToken: { $min: "$token" },
+          lastToken: { $max: "$token" },
         },
       },
-      {
-        $facet: {
-          overall: [
-            {
-              $group: {
-                _id: null,
-                count: { $sum: 1 },
-                total: { $sum: "$pricing.grandTotal" },
-                minToken: { $min: "$tokenNumber" },
-                maxToken: { $max: "$tokenNumber" },
-              },
-            },
-          ],
-          byStatus: [
-            {
-              $group: {
-                _id: "$status",
-                count: { $sum: 1 },
-                total: { $sum: "$pricing.grandTotal" },
-              },
-            },
-            { $sort: { _id: 1 } },
-          ],
-        },
-      },
-    ];
+    ]);
 
-    const [result] = await Order.aggregate(pipeline).allowDiskUse(true);
-    const overall = (result?.overall?.[0]) || {
-      count: 0,
-      total: 0,
-      minToken: null,
-      maxToken: null,
+    const summary = summaryAgg[0] || {
+      ordersCount: 0,
+      grandTotal: 0,
+      firstToken: null,
+      lastToken: null,
     };
 
+    // 4) List (paged, newest first)
+    const orders = await Order.find(q)
+      .sort({ createdAt: -1 })
+      .skip((pageNum - 1) * limitNum)
+      .limit(limitNum)
+      .lean();
+
     return res.status(200).json({
-      date: dateStr,
-      timeZone: "UTC",
+      // echo filters
       vendorId,
-      branchId,
-      ordersCount: overall.count || 0,
-      grandTotal: Number(overall.total || 0),
-      tokens: {
-        first: overall.minToken ?? null,
-        last: overall.maxToken ?? null,
+      branchId: branch || null,
+      period,
+      date: date || null,
+      from: from || null,
+      to: to || null,
+
+      // summary
+      summary: {
+        ordersCount: summary.ordersCount,
+        grandTotal: Number(summary.grandTotal || 0),
+        tokens: {
+          first: summary.firstToken,
+          last: summary.lastToken,
+        },
       },
-      byStatus: (result?.byStatus || []).map((r) => ({
-        status: r._id,
-        count: r.count,
-        total: r.total,
-      })),
+
+      // list
+      page: pageNum,
+      limit: limitNum,
+      results: orders.length,
+      orders,
+      range: {
+        start: start.toISOString(),
+        end: end.toISOString(),
+      },
     });
   } catch (err) {
-    console.error("Daily Summary Error:", err);
-    return res.status(500).json({ error: err.message || "Server error" });
+    console.error("Get Orders Error:", err);
+    return res.status(500).json({ error: err.message });
   }
 };
