@@ -232,6 +232,7 @@
 // };
 // src/controllers/orderController.js
 // src/controllers/orderController.js
+// src/controllers/orderController.js
 import Branch from "../models/Branch.js";
 import Order from "../models/Order.js";
 import { nextDailyOrderSeq } from "../models/Counter.js";
@@ -256,7 +257,7 @@ function _pad(num, width) {
   return String(num).padStart(width, "0");
 }
 function _yyyymmddUTC(date) {
-  // Use UTC date for consistency across regions
+  // Use UTC date for stability
   const iso = date.toISOString().slice(0, 10); // YYYY-MM-DD
   return iso.replace(/-/g, "");
 }
@@ -264,7 +265,7 @@ function _round3(x) {
   return Math.round((x + Number.EPSILON) * 1000) / 1000;
 }
 
-/** Build the *long* order number in the requested format
+/** Build the long order number:
  *   YYYYMMDD + vendorIdDigits + branchDigits(5) + dailySeq(7)
  *   e.g. "2025101923000040000001"
  */
@@ -277,13 +278,11 @@ function buildOrderNumber({ date, vendorId, branchId, dailySeq }) {
 }
 
 /* -------------------------- helpers: pricing ----------------------------- */
-/** Compute totals (service charge on subtotal, VAT on subtotal+SC) */
 function computePricing({ items, vatPercent = 0, servicePercent = 0 }) {
   const subtotal = _round3(
     items.reduce((sum, it) => {
       const qty = Number(it.quantity || 0);
       const unit = Number(it.unitBasePrice || 0);
-      // Each item may have addons: sum their price
       const addons = Array.isArray(it.addons) ? it.addons : [];
       const addonsUnit = addons.reduce(
         (a, ad) => a + Number(ad?.price || 0),
@@ -309,36 +308,12 @@ function computePricing({ items, vatPercent = 0, servicePercent = 0 }) {
   };
 }
 
-/* ------------------------------- controller ------------------------------ */
-
+/* ------------------------------- createOrder ----------------------------- */
 /**
  * POST /api/public/orders
- * Body:
- * {
- *   "branch": "BR-000004",
- *   "qr": { "type": "table"|"room", "number": "table-9", "qrId": "QR-..." },
- *   "currency": "BHD",
- *   "customer": { "name": "John", "phone": "3600..." },
- *   "items": [
- *     {
- *       "itemId": "...",
- *       "nameEnglish": "...", "nameArabic": "...",
- *       "imageUrl": "...",
- *       "isSizedBased": true|false,
- *       "size": { "label": "2 person", "price": 2.5 } | null,
- *       "addons": [{ "id":"...", "label":"...", "price": 0.2 }, ...],
- *       "unitBasePrice": 2.5,   // server will trust/validate later — for MVP we use as-is
- *       "quantity": 2,
- *       "notes": "no onions"
- *     }
- *   ],
- *   "remarks": "table near window",
- *   "source": "customer_view"
- * }
  */
 export const createOrder = async (req, res) => {
   try {
-    // 1) Basic validation
     const branchId = String(req.body?.branch || "").trim();
     const qr = req.body?.qr || {};
     const items = Array.isArray(req.body?.items) ? req.body.items : [];
@@ -354,25 +329,18 @@ export const createOrder = async (req, res) => {
       return res.status(400).json({ error: "No items provided" });
     }
 
-    // 2) Branch & taxes snapshot
     const branch = await Branch.findOne({ branchId }).lean();
-    if (!branch) {
-      return res.status(404).json({ error: "Branch not found" });
-    }
+    if (!branch) return res.status(404).json({ error: "Branch not found" });
+
     const vendorId = branch.vendorId;
     const vatPercent = Number(branch?.taxes?.vatPercentage || 0);
     const servicePercent = Number(branch?.taxes?.serviceChargePercentage || 0);
 
-    // 3) Compute pricing
-    const pricing = computePricing({
-      items,
-      vatPercent,
-      servicePercent,
-    });
+    const pricing = computePricing({ items, vatPercent, servicePercent });
 
-    // 4) Daily token (per vendor+branch+day) + Long order number
+    // Daily token (UTC day) + long order number
     const now = new Date();
-    const ymdKey = now.toISOString().slice(0, 10); // "YYYY-MM-DD" (UTC date)
+    const ymdKey = now.toISOString().slice(0, 10); // "YYYY-MM-DD" (UTC day)
     const tokenNumber = await nextDailyOrderSeq(vendorId, branchId, ymdKey);
 
     const orderNumber = buildOrderNumber({
@@ -382,18 +350,17 @@ export const createOrder = async (req, res) => {
       dailySeq: tokenNumber,
     });
 
-    // 5) Build order doc
     const orderDoc = await Order.create({
-      orderNumber,              // e.g. "2025101923000040000001"
-      tokenNumber,              // short daily token to show to customer
+      orderNumber,
+      tokenNumber, // short daily token visible to customer
       status: "pending",
 
-      branchId,                 // business code, e.g. "BR-000004"
+      branchId, // business code (BR-xxxxx)
       vendorId,
       currency: currency || branch.currency || "BHD",
 
       qr: {
-        type: String(qr?.type || "").toLowerCase(), // store normalized
+        type: String(qr?.type || "").toLowerCase(),
         number: String(qr?.number || ""),
         qrId: String(qr?.qrId || ""),
       },
@@ -434,7 +401,7 @@ export const createOrder = async (req, res) => {
         notes: (it?.notes || "").toString(),
       })),
 
-      pricing,                  // snapshot of computed totals
+      pricing,
       taxesSnapshot: {
         vatPercent,
         serviceChargePercent: servicePercent,
@@ -445,11 +412,10 @@ export const createOrder = async (req, res) => {
       placedAt: now,
     });
 
-    // 6) Respond
     return res.status(201).json({
       message: "Order placed",
-      orderNumber: orderNumber,
-      tokenNumber: tokenNumber,
+      orderNumber,
+      tokenNumber,
       branchId,
       vendorId,
       pricing,
@@ -459,6 +425,100 @@ export const createOrder = async (req, res) => {
     });
   } catch (err) {
     console.error("Create Order Error:", err);
+    return res.status(500).json({ error: err.message || "Server error" });
+  }
+};
+
+/* ------------------------------ getDailySummary -------------------------- */
+/**
+ * GET /api/orders/summary?branch=BR-000004&date=YYYY-MM-DD
+ * (Optional) vendor=V000023
+ *
+ * Uses UTC day boundaries to match how tokenNumber resets daily.
+ */
+export const getDailySummary = async (req, res) => {
+  try {
+    const branchId = String(req.query?.branch || "").trim();
+    const vendorIdQ = String(req.query?.vendor || "").trim();
+    const dateStr =
+      String(req.query?.date || "").trim() ||
+      new Date().toISOString().slice(0, 10); // "YYYY-MM-DD" (UTC)
+
+    if (!branchId) {
+      return res.status(400).json({ error: 'Missing "branch" query (e.g. BR-000004)' });
+    }
+
+    const branch = await Branch.findOne({ branchId }).lean();
+    if (!branch) return res.status(404).json({ error: "Branch not found" });
+
+    const vendorId = vendorIdQ || branch.vendorId;
+
+    // UTC day range
+    const start = new Date(`${dateStr}T00:00:00.000Z`);
+    const end = new Date(`${dateStr}T23:59:59.999Z`);
+
+    const pipeline = [
+      {
+        $match: {
+          branchId,
+          vendorId,
+          placedAt: { $gte: start, $lt: end },
+        },
+      },
+      {
+        $facet: {
+          overall: [
+            {
+              $group: {
+                _id: null,
+                count: { $sum: 1 },
+                total: { $sum: "$pricing.grandTotal" },
+                minToken: { $min: "$tokenNumber" },
+                maxToken: { $max: "$tokenNumber" },
+              },
+            },
+          ],
+          byStatus: [
+            {
+              $group: {
+                _id: "$status",
+                count: { $sum: 1 },
+                total: { $sum: "$pricing.grandTotal" },
+              },
+            },
+            { $sort: { _id: 1 } },
+          ],
+        },
+      },
+    ];
+
+    const [result] = await Order.aggregate(pipeline).allowDiskUse(true);
+    const overall = (result?.overall?.[0]) || {
+      count: 0,
+      total: 0,
+      minToken: null,
+      maxToken: null,
+    };
+
+    return res.status(200).json({
+      date: dateStr,
+      timeZone: "UTC",
+      vendorId,
+      branchId,
+      ordersCount: overall.count || 0,
+      grandTotal: Number(overall.total || 0),
+      tokens: {
+        first: overall.minToken ?? null,
+        last: overall.maxToken ?? null,
+      },
+      byStatus: (result?.byStatus || []).map((r) => ({
+        status: r._id,
+        count: r.count,
+        total: r.total,
+      })),
+    });
+  } catch (err) {
+    console.error("Daily Summary Error:", err);
     return res.status(500).json({ error: err.message || "Server error" });
   }
 };
