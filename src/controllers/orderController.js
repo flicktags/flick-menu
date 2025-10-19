@@ -236,11 +236,15 @@
 // src/controllers/orderController.js
 // src/controllers/orderController.js
 // src/controllers/orderController.js (excerpt)
+
+
+
+// src/controllers/orderController.js
 import Branch from "../models/Branch.js";
 import Order from "../models/Order.js";
 import { nextSeqByKey, nextTokenForDay } from "../models/Counter.js";
 
-// --- helpers for formatting IDs & TZ date ---
+// --- helpers ---
 function leftPad(value, size) {
   const s = String(value ?? "");
   return s.length >= size ? s : "0".repeat(size - s.length) + s;
@@ -251,16 +255,13 @@ function digitsAtEnd(s) {
 }
 function vendorDigits2(vendorId) {
   const d = digitsAtEnd(vendorId);
-  // keep last 2 digits (or pad to 2 if fewer)
   return leftPad(d.slice(-2) || "0", 2);
 }
 function branchDigits5(branchId) {
   const d = digitsAtEnd(branchId);
-  // keep last 5 digits (or pad to 5 if fewer)
   return leftPad(d.slice(-5) || "0", 5);
 }
 function tzParts(tz = "UTC") {
-  // returns {y, m, d, ymd}
   const fmt = new Intl.DateTimeFormat("en-CA", {
     timeZone: tz,
     year: "numeric",
@@ -274,17 +275,16 @@ function tzParts(tz = "UTC") {
   return { y, m, d, ymd: `${y}${m}${d}` };
 }
 
-// PUBLIC create (from customer view)
-export const placePublicOrder = async (req, res) => {
+// === PUBLIC: place order (no token) ===
+export const createOrder = async (req, res) => {
   try {
-    // 1) Basic body
     const {
       branch: branchCode,
       qr,
       currency,
       customer,
       items,
-      pricing,      // MUST be provided by client; server will verify
+      pricing,      // must be provided by client for now
       remarks,
       source = "customer_view",
     } = req.body || {};
@@ -295,7 +295,6 @@ export const placePublicOrder = async (req, res) => {
     }
     if (!pricing) return res.status(400).json({ error: "Missing pricing object" });
 
-    // 2) Branch (to get vendor & taxes & timeZone)
     const branch = await Branch.findOne({ branchId: branchCode }).lean();
     if (!branch) return res.status(404).json({ error: "Branch not found" });
 
@@ -303,16 +302,14 @@ export const placePublicOrder = async (req, res) => {
     const tz = branch.timeZone || "UTC";
     const { y, m, d, ymd } = tzParts(tz);
 
-    // 3) Build token (small, per-day)
-    const tokenNumber = await nextTokenForDay(vendorId, branch.branchId, ymd); // 1,2,3,...
+    // per-day small token
+    const tokenNumber = await nextTokenForDay(vendorId, branch.branchId, ymd);
 
-    // 4) Build order number using per-day counter
-    const v2 = vendorDigits2(vendorId);           // "23"
-    const b5 = branchDigits5(branch.branchId);    // "00004"
-
+    // per-day unique order number: YYYYMMDD + v2 + b5 + seq(7)
+    const v2 = vendorDigits2(vendorId);
+    const b5 = branchDigits5(branch.branchId);
     const counterKey = `orders:daily:${vendorId}:${branch.branchId}:${ymd}`;
 
-    // Prepare the order doc (without orderNumber yet)
     const baseDoc = {
       vendorId,
       branchId: branch.branchId,
@@ -323,26 +320,21 @@ export const placePublicOrder = async (req, res) => {
         phone: customer?.phone || null,
       },
       items,
-      pricing,     // you may re-calc and verify here if you want – omitted for brevity
+      pricing, // optional: re-calc & verify
       remarks: remarks || null,
       source,
       status: "Pending",
-      tokenNumber,         // small visible token for the day
+      tokenNumber,
     };
 
-    // 5) Try-create with retry on duplicate orderNumber
     const MAX_RETRIES = 3;
     let lastErr = null;
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-      const seq = await nextSeqByKey(counterKey); // 1, 2, 3...
+      const seq = await nextSeqByKey(counterKey); // 1,2,3...
       const orderNumber = `${y}${m}${d}${v2}${b5}${leftPad(seq, 7)}`;
 
       try {
-        const created = await Order.create({
-          ...baseDoc,
-          orderNumber,
-        });
-
+        const created = await Order.create({ ...baseDoc, orderNumber });
         return res.status(201).json({
           message: "Order placed",
           orderId: String(created._id),
@@ -352,23 +344,163 @@ export const placePublicOrder = async (req, res) => {
           createdAt: created.createdAt,
         });
       } catch (e) {
-        // Handle duplicate 'orderNumber' (race) and retry
         if (e && e.code === 11000 && e.keyPattern && e.keyPattern.orderNumber) {
-          lastErr = e;
-          continue; // get a new seq and try again
+          lastErr = e; // duplicate orderNumber — retry
+          continue;
         }
-        // Any other error => bail
         throw e;
       }
     }
 
-    // If we got here, it kept colliding (very unlikely)
     return res.status(409).json({
       error: "Could not allocate a unique order number after retries",
       details: lastErr?.message || null,
     });
   } catch (err) {
-    console.error("Place order error:", err);
+    console.error("createOrder error:", err);
     return res.status(500).json({ error: err.message || "Server error" });
   }
 };
+
+// Optional: if somewhere else still imports placePublicOrder, keep a backward-compatible alias:
+export const placePublicOrder = createOrder;
+
+
+
+
+// import Branch from "../models/Branch.js";
+// import Order from "../models/Order.js";
+// import { nextSeqByKey, nextTokenForDay } from "../models/Counter.js";
+
+// // --- helpers for formatting IDs & TZ date ---
+// function leftPad(value, size) {
+//   const s = String(value ?? "");
+//   return s.length >= size ? s : "0".repeat(size - s.length) + s;
+// }
+// function digitsAtEnd(s) {
+//   const m = String(s || "").match(/(\d+)$/);
+//   return m ? m[1] : "";
+// }
+// function vendorDigits2(vendorId) {
+//   const d = digitsAtEnd(vendorId);
+//   // keep last 2 digits (or pad to 2 if fewer)
+//   return leftPad(d.slice(-2) || "0", 2);
+// }
+// function branchDigits5(branchId) {
+//   const d = digitsAtEnd(branchId);
+//   // keep last 5 digits (or pad to 5 if fewer)
+//   return leftPad(d.slice(-5) || "0", 5);
+// }
+// function tzParts(tz = "UTC") {
+//   // returns {y, m, d, ymd}
+//   const fmt = new Intl.DateTimeFormat("en-CA", {
+//     timeZone: tz,
+//     year: "numeric",
+//     month: "2-digit",
+//     day: "2-digit",
+//   });
+//   const parts = fmt.formatToParts(new Date());
+//   const y = parts.find(p => p.type === "year")?.value ?? "0000";
+//   const m = parts.find(p => p.type === "month")?.value ?? "00";
+//   const d = parts.find(p => p.type === "day")?.value ?? "00";
+//   return { y, m, d, ymd: `${y}${m}${d}` };
+// }
+
+// // PUBLIC create (from customer view)
+// export const placePublicOrder = async (req, res) => {
+//   try {
+//     // 1) Basic body
+//     const {
+//       branch: branchCode,
+//       qr,
+//       currency,
+//       customer,
+//       items,
+//       pricing,      // MUST be provided by client; server will verify
+//       remarks,
+//       source = "customer_view",
+//     } = req.body || {};
+
+//     if (!branchCode) return res.status(400).json({ error: "Missing branch" });
+//     if (!Array.isArray(items) || items.length === 0) {
+//       return res.status(400).json({ error: "No items" });
+//     }
+//     if (!pricing) return res.status(400).json({ error: "Missing pricing object" });
+
+//     // 2) Branch (to get vendor & taxes & timeZone)
+//     const branch = await Branch.findOne({ branchId: branchCode }).lean();
+//     if (!branch) return res.status(404).json({ error: "Branch not found" });
+
+//     const vendorId = branch.vendorId;
+//     const tz = branch.timeZone || "UTC";
+//     const { y, m, d, ymd } = tzParts(tz);
+
+//     // 3) Build token (small, per-day)
+//     const tokenNumber = await nextTokenForDay(vendorId, branch.branchId, ymd); // 1,2,3,...
+
+//     // 4) Build order number using per-day counter
+//     const v2 = vendorDigits2(vendorId);           // "23"
+//     const b5 = branchDigits5(branch.branchId);    // "00004"
+
+//     const counterKey = `orders:daily:${vendorId}:${branch.branchId}:${ymd}`;
+
+//     // Prepare the order doc (without orderNumber yet)
+//     const baseDoc = {
+//       vendorId,
+//       branchId: branch.branchId,
+//       currency: currency || branch.currency || "BHD",
+//       qr: qr || null,
+//       customer: {
+//         name: customer?.name || "",
+//         phone: customer?.phone || null,
+//       },
+//       items,
+//       pricing,     // you may re-calc and verify here if you want – omitted for brevity
+//       remarks: remarks || null,
+//       source,
+//       status: "Pending",
+//       tokenNumber,         // small visible token for the day
+//     };
+
+//     // 5) Try-create with retry on duplicate orderNumber
+//     const MAX_RETRIES = 3;
+//     let lastErr = null;
+//     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+//       const seq = await nextSeqByKey(counterKey); // 1, 2, 3...
+//       const orderNumber = `${y}${m}${d}${v2}${b5}${leftPad(seq, 7)}`;
+
+//       try {
+//         const created = await Order.create({
+//           ...baseDoc,
+//           orderNumber,
+//         });
+
+//         return res.status(201).json({
+//           message: "Order placed",
+//           orderId: String(created._id),
+//           orderNumber: created.orderNumber,
+//           tokenNumber: created.tokenNumber,
+//           status: created.status,
+//           createdAt: created.createdAt,
+//         });
+//       } catch (e) {
+//         // Handle duplicate 'orderNumber' (race) and retry
+//         if (e && e.code === 11000 && e.keyPattern && e.keyPattern.orderNumber) {
+//           lastErr = e;
+//           continue; // get a new seq and try again
+//         }
+//         // Any other error => bail
+//         throw e;
+//       }
+//     }
+
+//     // If we got here, it kept colliding (very unlikely)
+//     return res.status(409).json({
+//       error: "Could not allocate a unique order number after retries",
+//       details: lastErr?.message || null,
+//     });
+//   } catch (err) {
+//     console.error("Place order error:", err);
+//     return res.status(500).json({ error: err.message || "Server error" });
+//   }
+// };
