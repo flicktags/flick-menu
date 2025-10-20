@@ -3,13 +3,22 @@
   "builds": [
     {
       "src": "server.js",
-      "use": "@vercel/node"
+      "use": "@vercel/node",
+      "config": {
+        "runtime": "nodejs20.x",
+        "includeFiles": [
+          "src/**",
+          "routes/**",
+          "controllers/**",
+          "middleware/**",
+          "models/**",
+          "utils/**",
+          "config/**"
+        ]
+      }
     }
   ],
   "routes": [
-    {
-      "src": "/(.*)",
-      "dest": "/server.js"
-    }
+    { "src": "/(.*)", "dest": "/server.js" }
   ]
 }
