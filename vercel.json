@@ -1,24 +1,16 @@
 {
-  "version": 2,
-  "builds": [
-    {
-      "src": "server.js",
-      "use": "@vercel/node",
-      "config": {
-        "runtime": "nodejs20.x",
-        "includeFiles": [
-          "src/**",
-          "routes/**",
-          "controllers/**",
-          "middleware/**",
-          "models/**",
-          "utils/**",
-          "config/**"
-        ]
+    "version": 2,
+    "builds": [
+      {
+        "src": "server.js", 
+        "use": "@vercel/node"
       }
-    }
-  ],
-  "routes": [
-    { "src": "/(.*)", "dest": "/server.js" }
-  ]
-}
+    ],
+    "routes": [
+      {
+        "src": "/(.*)",
+        "dest": "/server.js"
+      }
+    ]
+  }
+  

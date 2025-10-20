@@ -1,7 +1,6 @@
 import express from "express";
 import cors from "cors";
 // import authRoutes from "./routes/authRoutes.js";
-import authRouter from "./routes/authRoutes.js";
 import vendorRoutes from "./routes/vendorRoutes.js";
 import branchRoutes from "./routes/branchRoutes.js";   
 import lookupsApi from "./routes/LookupsAPI.js";
@@ -21,7 +20,6 @@ app.use(express.json());
 // Routes
 // app.use("/api/vendor", authRoutes);
 // app.use("/api/branches", authRoutes);
-app.use("/api/auth", authRouter);        // /api/auth/bootstrap/
 
 app.use("/api/vendor", vendorRoutes);
 app.use("/api/branches", branchRoutes);
