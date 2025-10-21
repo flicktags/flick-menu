@@ -11,7 +11,8 @@
 // src/routes/authRoute.js
 import express from "express";
 import { authBootstrap } from "../controllers/authController.js";
-import { verifyFirebaseToken } from "../middleware/authMiddleware.js";
+import { verifyFirebaseToken } from "../middlewares/authMiddleware.js";
+
 
 const router = express.Router();
 
