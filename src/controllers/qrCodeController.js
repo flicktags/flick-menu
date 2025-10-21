@@ -299,36 +299,60 @@ export default generateQr;
  * - Auth: Authorization: Bearer <token>
  * - Returns QRs in ASCENDING order by type then numeric suffix (table-1, table-2, …).
  */
+// controllers/qrCodeController.js
+// controllers/qrCodeController.js
 export const getBranchQrs = async (req, res) => {
   try {
-    // 1) Auth
-    const token = getBearerToken(req);
+    const h = req.headers?.authorization || "";
+    const tokenMatch = /^Bearer\s+(.+)$/i.exec(h);
+    const token = tokenMatch ? tokenMatch[1] : null;
+
     if (!token) return res.status(400).json({ message: "Firebase token required" });
 
     const decoded = await admin.auth().verifyIdToken(token);
-    const userId = decoded.uid;
+    const uid = decoded.uid;
 
-    // 2) Vendor
-    const vendor = await Vendor.findOne({ userId }).lean();
-    if (!vendor) return res.status(404).json({ message: "No vendor associated with this account" });
-
-    // 3) Branch ownership
     const branchObjectId = String(req.params?.branchId || "").trim();
     if (!branchObjectId) return res.status(400).json({ message: "branchId (Mongo _id) is required" });
 
+    console.log("[QR][GET] uid =", uid);
+    console.log("[QR][GET] branchObjectId =", branchObjectId);
+
     const branch = await Branch.findById(branchObjectId).lean();
-    if (!branch) return res.status(404).json({ message: "Branch not found" });
-    if (branch.vendorId !== vendor.vendorId) {
-      return res.status(403).json({ message: "Branch does not belong to your vendor account" });
+    if (!branch) {
+      console.log("[QR][GET] branch not found");
+      return res.status(404).json({ message: "Branch not found" });
     }
 
-    // 4) Fetch and sort ascending by type then numeric suffix
+    // Load vendor by the branch's vendorId (not by user uid)
+    const vendor = await Vendor.findOne({ vendorId: branch.vendorId }).lean();
+
+    const isVendorOwner   = !!vendor && vendor.userId === uid;
+    const isBranchManager = branch.userId === uid;
+
+    console.log("[QR][GET] vendorId on branch =", branch.vendorId);
+    console.log("[QR][GET] vendor owner uid =", vendor?.userId);
+    console.log("[QR][GET] branch manager uid =", branch.userId);
+    console.log("[QR][GET] isVendorOwner =", isVendorOwner, "isBranchManager =", isBranchManager);
+
+    if (!isVendorOwner && !isBranchManager) {
+      console.log("[QR][GET] Forbidden for this uid");
+      return res.status(403).json({ message: "Forbidden" });
+    }
+
+    // Fetch QRs that match this branch and vendor (works for both roles)
     const items = await QrCode.find({
       $and: [
         { $or: [{ branchId: branchObjectId }, { branchId: branch._id }] },
-        { vendorId: vendor.vendorId },
+        { vendorId: branch.vendorId },
       ],
     }).lean();
+
+    // Sort asc by type then numeric suffix (table-1, table-2, …)
+    const suffixOf = (numStr) => {
+      const m = /(\d+)$/.exec(String(numStr || ""));
+      return m ? parseInt(m[1], 10) : -Infinity;
+    };
 
     items.sort((a, b) => {
       const tA = String(a.type || "");
@@ -340,10 +364,12 @@ export const getBranchQrs = async (req, res) => {
       return String(a._id).localeCompare(String(b._id));
     });
 
+    console.log("[QR][GET] total items =", items.length);
+
     return res.status(200).json({
       branchObjectId,
-      branchId: branch.branchId, // business id (e.g., BR-000004)
-      vendorId: vendor.vendorId,
+      branchId: branch.branchId,   // business id (BR-000004)
+      vendorId: branch.vendorId,
       total: items.length,
       items,
     });
@@ -352,6 +378,8 @@ export const getBranchQrs = async (req, res) => {
     return res.status(500).json({ message: err.message });
   }
 };
+
+
 
 /**
  * POST /api/qrcode/branch/:branchId/delete-latest
