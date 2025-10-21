@@ -5,4 +5,3 @@ const vendorRouter = express.Router();
 vendorRouter.post("/register", registerVendor);
 
 export default vendorRouter;
-//
