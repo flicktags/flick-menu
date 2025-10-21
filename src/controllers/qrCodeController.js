@@ -26,116 +26,238 @@ function suffixOf(numStr) {
  * - **Per-type** counters: qrGeneratedTable / qrGeneratedRoom (atomic $inc).
  * - Total counter: qrGenerated (atomic $inc) to enforce overall limit.
  */
+// const generateQr = async (req, res) => {
+//   try {
+//     // 1) Auth
+//     const bearer = getBearerToken(req);
+//     const token = bearer || req.body?.token; // keep body fallback for POST only
+//     if (!token) return res.status(400).json({ message: "Firebase token required" });
+
+//     const decoded = await admin.auth().verifyIdToken(token);
+//     const userId = decoded.uid;
+
+//     // 2) Inputs
+//     const branchBusinessId = String(req.body?.branchId || "").trim(); // e.g., "BR-000004"
+//     const typeRaw = String(req.body?.type || "").trim();
+//     const labelRaw = req.body?.label;
+//     const numberOfQrsRaw = req.body?.numberOfQrs;
+
+//     if (!branchBusinessId || !typeRaw || numberOfQrsRaw === undefined || numberOfQrsRaw === null) {
+//       return res.status(400).json({ message: "Missing required fields (branchId, type, numberOfQrs)" });
+//     }
+
+//     const count = parseInt(numberOfQrsRaw, 10);
+//     if (!Number.isFinite(count) || count <= 0) {
+//       return res.status(400).json({ message: "numberOfQrs must be a positive integer" });
+//     }
+
+//     // Normalize type for URL/number, TitleCase for response if your schema allows it
+//     const typeLower = typeRaw.toLowerCase();
+//     if (!["table", "room"].includes(typeLower)) {
+//       return res.status(400).json({ message: 'type must be "table" or "room"' });
+//     }
+//     const typeStored = typeLower === "table" ? "Table" : "Room"; // <-- keep if schema allows TitleCase
+//     const label = typeof labelRaw === "string" && labelRaw.trim().length > 0 ? labelRaw.trim() : undefined;
+
+//     // 3) Vendor by Firebase user
+//     const vendor = await Vendor.findOne({ userId }).lean();
+//     if (!vendor) return res.status(404).json({ message: "No vendor associated with this account" });
+
+//     // 4) Branch by business id (e.g., BR-000004)
+//     const branch = await Branch.findOne({ branchId: branchBusinessId }).lean();
+//     if (!branch) return res.status(404).json({ message: "Branch not found" });
+//     if (branch.vendorId !== vendor.vendorId) {
+//       return res.status(403).json({ message: "Branch does not belong to your vendor account" });
+//     }
+
+//     // 5) Enforce overall limit atomically
+//     //    Use $expr to ensure qrGenerated + count <= qrLimit in the same op.
+//     const incField = typeLower === "table" ? "qrGeneratedTable" : "qrGeneratedRoom";
+//     const filter = {
+//       branchId: branchBusinessId,
+//       $expr: { $lte: [{ $add: ["$qrGenerated", count] }, "$qrLimit"] },
+//     };
+
+//     const prev = await Branch.findOneAndUpdate(
+//       filter,
+//       { $inc: { qrGenerated: count, [incField]: count } },
+//       { new: false } // get previous values, we will derive start from prev[incField]
+//     ).lean();
+
+//     if (!prev) {
+//       // Either branch not found by businessId or limit exceeded under concurrency
+//       return res.status(400).json({
+//         message: "QR limit exceeded or branch not found (concurrent request). Please try a smaller count.",
+//       });
+//     }
+
+//     // 6) Compute start index for THIS type.
+//     //    If this is the first time we add the type counter, backfill from DB max(number) for that type.
+//     let prevTypeCounter = Number(prev?.[incField]);
+//     if (!Number.isFinite(prevTypeCounter)) {
+//       // field didn't exist on prev doc -> backfill from existing rows of that type
+//       const lastOfType = await QrCode.find({
+//         $and: [
+//           { $or: [{ branchId: String(branch._id) }, { branchId: branch._id }] },
+//           { vendorId: vendor.vendorId },
+//           { type: { $in: [typeStored, typeLower] } },
+//         ],
+//       })
+//         .select("number")
+//         .sort({ createdAt: -1, _id: -1 })
+//         .limit(1)
+//         .lean();
+
+//       const maxSuffix = suffixOf(lastOfType?.[0]?.number);
+//       prevTypeCounter = Number.isFinite(maxSuffix) ? Math.max(0, maxSuffix) : 0;
+//     }
+
+//     const startIndex = prevTypeCounter + 1;
+//     const baseUrl = "https://yourapp.com/lander";
+
+//     // 7) Create the QR docs
+//     const created = [];
+//     for (let i = 0; i < count; i++) {
+//       const suffix = startIndex + i;                    // per-type 1..N
+//       const qrId = await generateQrId();
+//       const qrNumber = `${typeLower}-${suffix}`;        // e.g., "table-9"
+
+//       const qrDataUrl =
+//         `${baseUrl}` +
+//         `?branch=${encodeURIComponent(branchBusinessId)}` +
+//         `&type=${encodeURIComponent(typeLower)}` +
+//         `&qrId=${encodeURIComponent(qrId)}` +
+//         `&number=${encodeURIComponent(qrNumber)}`;
+
+//       const qrImage = await QRCode.toDataURL(qrDataUrl);
+
+//       const doc = await QrCode.create({
+//         qrId,
+//         branchId: String(branch._id), // store Mongo _id as string
+//         vendorId: vendor.vendorId,
+//         type: typeStored,             // "Table" | "Room" (if schema forces lowercase, change here)
+//         label,
+//         number: qrNumber,
+//         qrUrl: qrImage,
+//         active: true,
+//       });
+
+//       created.push({
+//         qrId: doc.qrId,
+//         branchId: doc.branchId,
+//         vendorId: doc.vendorId,
+//         type: doc.type,
+//         label: doc.label,
+//         number: doc.number,
+//         qrUrl: doc.qrUrl,
+//         active: doc.active,
+//         _id: doc._id,
+//         createdAt: doc.createdAt,
+//         updatedAt: doc.updatedAt,
+//         __v: doc.__v,
+//       });
+//     }
+
+//     return res.status(201).json({
+//       message: "QR codes generated successfully",
+//       generated: created.length,
+//       startFrom: startIndex,
+//       qrs: created,
+//     });
+//   } catch (error) {
+//     console.error("QR Generate Error:", error);
+//     return res.status(500).json({ message: error.message });
+//   }
+// };
+
+// controllers/qrCodeController.js
 const generateQr = async (req, res) => {
   try {
     // 1) Auth
     const bearer = getBearerToken(req);
-    const token = bearer || req.body?.token; // keep body fallback for POST only
+    const token = bearer || req.body?.token;
     if (!token) return res.status(400).json({ message: "Firebase token required" });
 
     const decoded = await admin.auth().verifyIdToken(token);
-    const userId = decoded.uid;
+    const uid = decoded.uid;
 
     // 2) Inputs
     const branchBusinessId = String(req.body?.branchId || "").trim(); // e.g., "BR-000004"
-    const typeRaw = String(req.body?.type || "").trim();
-    const labelRaw = req.body?.label;
+    const typeRaw = String(req.body?.type || "").trim().toLowerCase();
     const numberOfQrsRaw = req.body?.numberOfQrs;
+    const labelRaw = req.body?.label;
 
     if (!branchBusinessId || !typeRaw || numberOfQrsRaw === undefined || numberOfQrsRaw === null) {
       return res.status(400).json({ message: "Missing required fields (branchId, type, numberOfQrs)" });
     }
-
+    if (!["table", "room"].includes(typeRaw)) {
+      return res.status(400).json({ message: 'type must be "table" or "room"' });
+    }
     const count = parseInt(numberOfQrsRaw, 10);
     if (!Number.isFinite(count) || count <= 0) {
       return res.status(400).json({ message: "numberOfQrs must be a positive integer" });
     }
-
-    // Normalize type for URL/number, TitleCase for response if your schema allows it
-    const typeLower = typeRaw.toLowerCase();
-    if (!["table", "room"].includes(typeLower)) {
-      return res.status(400).json({ message: 'type must be "table" or "room"' });
-    }
-    const typeStored = typeLower === "table" ? "Table" : "Room"; // <-- keep if schema allows TitleCase
     const label = typeof labelRaw === "string" && labelRaw.trim().length > 0 ? labelRaw.trim() : undefined;
 
-    // 3) Vendor by Firebase user
-    const vendor = await Vendor.findOne({ userId }).lean();
-    if (!vendor) return res.status(404).json({ message: "No vendor associated with this account" });
-
-    // 4) Branch by business id (e.g., BR-000004)
+    // 3) Branch (by business id) + vendor from branch
     const branch = await Branch.findOne({ branchId: branchBusinessId }).lean();
     if (!branch) return res.status(404).json({ message: "Branch not found" });
-    if (branch.vendorId !== vendor.vendorId) {
-      return res.status(403).json({ message: "Branch does not belong to your vendor account" });
+
+    // 4) Permission: vendor owner OR branch manager
+    const vendor = await Vendor.findOne({ vendorId: branch.vendorId }).lean();
+    const isVendorOwner = !!vendor && vendor.userId === uid;
+    const isBranchManager = branch.userId === uid;
+
+    if (!isVendorOwner && !isBranchManager) {
+      return res.status(403).json({ message: "Forbidden" });
     }
 
     // 5) Enforce overall limit atomically
-    //    Use $expr to ensure qrGenerated + count <= qrLimit in the same op.
-    const incField = typeLower === "table" ? "qrGeneratedTable" : "qrGeneratedRoom";
+    const incField = typeRaw === "table" ? "qrGeneratedTable" : "qrGeneratedRoom";
     const filter = {
       branchId: branchBusinessId,
       $expr: { $lte: [{ $add: ["$qrGenerated", count] }, "$qrLimit"] },
     };
-
     const prev = await Branch.findOneAndUpdate(
       filter,
       { $inc: { qrGenerated: count, [incField]: count } },
-      { new: false } // get previous values, we will derive start from prev[incField]
+      { new: false }
     ).lean();
-
     if (!prev) {
-      // Either branch not found by businessId or limit exceeded under concurrency
       return res.status(400).json({
         message: "QR limit exceeded or branch not found (concurrent request). Please try a smaller count.",
       });
     }
 
-    // 6) Compute start index for THIS type.
-    //    If this is the first time we add the type counter, backfill from DB max(number) for that type.
+    // 6) Build sequential numbers per type (backfill safe)
     let prevTypeCounter = Number(prev?.[incField]);
     if (!Number.isFinite(prevTypeCounter)) {
-      // field didn't exist on prev doc -> backfill from existing rows of that type
       const lastOfType = await QrCode.find({
-        $and: [
-          { $or: [{ branchId: String(branch._id) }, { branchId: branch._id }] },
-          { vendorId: vendor.vendorId },
-          { type: { $in: [typeStored, typeLower] } },
-        ],
-      })
-        .select("number")
-        .sort({ createdAt: -1, _id: -1 })
-        .limit(1)
-        .lean();
-
+        branchId: { $in: [String(branch._id), branch._id] },
+        vendorId: branch.vendorId,
+        type: { $in: [typeRaw, typeRaw.charAt(0).toUpperCase() + typeRaw.slice(1)] }, // legacy mix
+      }).select("number").sort({ createdAt: -1, _id: -1 }).limit(1).lean();
       const maxSuffix = suffixOf(lastOfType?.[0]?.number);
       prevTypeCounter = Number.isFinite(maxSuffix) ? Math.max(0, maxSuffix) : 0;
     }
-
     const startIndex = prevTypeCounter + 1;
-    const baseUrl = "https://yourapp.com/lander";
 
-    // 7) Create the QR docs
+    // 7) Create docs
     const created = [];
     for (let i = 0; i < count; i++) {
-      const suffix = startIndex + i;                    // per-type 1..N
+      const suffix = startIndex + i;
       const qrId = await generateQrId();
-      const qrNumber = `${typeLower}-${suffix}`;        // e.g., "table-9"
+      const qrNumber = `${typeRaw}-${suffix}`;
 
-      const qrDataUrl =
-        `${baseUrl}` +
-        `?branch=${encodeURIComponent(branchBusinessId)}` +
-        `&type=${encodeURIComponent(typeLower)}` +
-        `&qrId=${encodeURIComponent(qrId)}` +
-        `&number=${encodeURIComponent(qrNumber)}`;
-
-      const qrImage = await QRCode.toDataURL(qrDataUrl);
+      const qrImage = await QRCode.toDataURL(
+        `https://yourapp.com/lander?branch=${encodeURIComponent(branchBusinessId)}&type=${typeRaw}&qrId=${qrId}&number=${qrNumber}`
+      );
 
       const doc = await QrCode.create({
         qrId,
-        branchId: String(branch._id), // store Mongo _id as string
-        vendorId: vendor.vendorId,
-        type: typeStored,             // "Table" | "Room" (if schema forces lowercase, change here)
+        branchId: String(branch._id),
+        vendorId: branch.vendorId,     // ✅ from branch (works for both roles)
+        type: typeRaw,                 // store lowercase
         label,
         number: qrNumber,
         qrUrl: qrImage,
@@ -169,7 +291,6 @@ const generateQr = async (req, res) => {
     return res.status(500).json({ message: error.message });
   }
 };
-
 export default generateQr;
 
 /**
@@ -238,54 +359,47 @@ export const getBranchQrs = async (req, res) => {
  * - Deletes from the **top** (highest suffix first) within the chosen type only.
  * - Decrements BOTH total (qrGenerated) and the per-type counter.
  */
+
 export const deleteLatestQrs = async (req, res) => {
   try {
-    // 1) Auth
     const token = getBearerToken(req);
     if (!token) return res.status(400).json({ message: "Firebase token required" });
 
     const decoded = await admin.auth().verifyIdToken(token);
-    const userId = decoded.uid;
+    const uid = decoded.uid;
 
-    // 2) Inputs
-    const branchObjectId = String(req.params?.branchId || "").trim();   // Mongo _id of branch
-    const rawType = String(req.body?.type || "").trim().toLowerCase();  // "table" | "room"
+    const branchObjectId = String(req.params?.branchId || "").trim();
+    const rawType = String(req.body?.type || "").trim().toLowerCase();
     const rawCount = req.body?.count;
 
     if (!branchObjectId) return res.status(400).json({ message: "branchId (Mongo _id) is required" });
     if (!["table", "room"].includes(rawType)) {
       return res.status(400).json({ message: 'type must be "table" or "room"' });
     }
-
     const count = parseInt(rawCount, 10);
     if (!Number.isFinite(count) || count <= 0) {
       return res.status(400).json({ message: "count must be a positive integer" });
     }
 
-    // 3) Vendor
-    const vendor = await Vendor.findOne({ userId }).lean();
-    if (!vendor) return res.status(404).json({ message: "No vendor associated with this account" });
-
-    // 4) Branch & ownership
     const branch = await Branch.findById(branchObjectId).lean();
     if (!branch) return res.status(404).json({ message: "Branch not found" });
-    if (branch.vendorId !== vendor.vendorId) {
-      return res.status(403).json({ message: "Branch does not belong to your vendor account" });
+
+    const vendor = await Vendor.findOne({ vendorId: branch.vendorId }).lean();
+    const isVendorOwner = !!vendor && vendor.userId === uid;
+    const isBranchManager = branch.userId === uid;
+    if (!isVendorOwner && !isBranchManager) {
+      return res.status(403).json({ message: "Forbidden" });
     }
 
-    // 5) "Room"/"Table" may exist in DB, also older lowercase. Match both.
-    const typeCandidates = [rawType, rawType.charAt(0).toUpperCase() + rawType.slice(1)];
+    const typeCandidates = [rawType, rawType.charAt(0).toUpperCase() + rawType.slice(1)]; // legacy
 
-    // 6) Get all QRs for that branch + type; sort by numeric suffix DESC (top/backward)
     const candidates = await QrCode.find({
       $and: [
         { $or: [{ branchId: branchObjectId }, { branchId: branch._id }] },
-        { vendorId: vendor.vendorId },
+        { vendorId: branch.vendorId },
         { type: { $in: typeCandidates } },
       ],
-    })
-      .select("_id number type")
-      .lean();
+    }).select("_id number type").lean();
 
     if (!candidates.length) {
       return res.status(200).json({
@@ -301,20 +415,9 @@ export const deleteLatestQrs = async (req, res) => {
     const ids = toDelete.map(d => d._id);
     const deletedNumbers = toDelete.map(d => String(d.number || ""));
 
-    if (ids.length === 0) {
-      return res.status(200).json({
-        message: `Nothing to delete for type "${rawType}".`,
-        deleted: 0,
-        deletedNumbers: [],
-        newQrGenerated: branch.qrGenerated ?? 0,
-      });
-    }
-
-    // 7) Delete selected docs
     const delRes = await QrCode.deleteMany({ _id: { $in: ids } });
     const actuallyDeleted = delRes?.deletedCount || 0;
 
-    // 8) Decrement counters (total and per-type), clamped to >= 0
     const incField = rawType === "table" ? "qrGeneratedTable" : "qrGeneratedRoom";
     if (actuallyDeleted > 0) {
       const fresh = await Branch.findById(branch._id, "qrGenerated qrGeneratedTable qrGeneratedRoom").lean();
@@ -329,9 +432,9 @@ export const deleteLatestQrs = async (req, res) => {
 
     return res.status(200).json({
       message: `Deleted ${actuallyDeleted} ${rawType} QR(s) from the top.`,
-      type: rawType === "table" ? "Table" : "Room",
+      type: rawType,
       deleted: actuallyDeleted,
-      deletedNumbers, // e.g. ["table-11", "table-10", ...]
+      deletedNumbers,
       newQrGenerated: Number(after?.qrGenerated ?? 0),
     });
   } catch (err) {
@@ -339,6 +442,109 @@ export const deleteLatestQrs = async (req, res) => {
     return res.status(500).json({ message: err.message });
   }
 };
+
+
+// export const deleteLatestQrs = async (req, res) => {
+//   try {
+//     // 1) Auth
+//     const token = getBearerToken(req);
+//     if (!token) return res.status(400).json({ message: "Firebase token required" });
+
+//     const decoded = await admin.auth().verifyIdToken(token);
+//     const userId = decoded.uid;
+
+//     // 2) Inputs
+//     const branchObjectId = String(req.params?.branchId || "").trim();   // Mongo _id of branch
+//     const rawType = String(req.body?.type || "").trim().toLowerCase();  // "table" | "room"
+//     const rawCount = req.body?.count;
+
+//     if (!branchObjectId) return res.status(400).json({ message: "branchId (Mongo _id) is required" });
+//     if (!["table", "room"].includes(rawType)) {
+//       return res.status(400).json({ message: 'type must be "table" or "room"' });
+//     }
+
+//     const count = parseInt(rawCount, 10);
+//     if (!Number.isFinite(count) || count <= 0) {
+//       return res.status(400).json({ message: "count must be a positive integer" });
+//     }
+
+//     // 3) Vendor
+//     const vendor = await Vendor.findOne({ userId }).lean();
+//     if (!vendor) return res.status(404).json({ message: "No vendor associated with this account" });
+
+//     // 4) Branch & ownership
+//     const branch = await Branch.findById(branchObjectId).lean();
+//     if (!branch) return res.status(404).json({ message: "Branch not found" });
+//     if (branch.vendorId !== vendor.vendorId) {
+//       return res.status(403).json({ message: "Branch does not belong to your vendor account" });
+//     }
+
+//     // 5) "Room"/"Table" may exist in DB, also older lowercase. Match both.
+//     const typeCandidates = [rawType, rawType.charAt(0).toUpperCase() + rawType.slice(1)];
+
+//     // 6) Get all QRs for that branch + type; sort by numeric suffix DESC (top/backward)
+//     const candidates = await QrCode.find({
+//       $and: [
+//         { $or: [{ branchId: branchObjectId }, { branchId: branch._id }] },
+//         { vendorId: vendor.vendorId },
+//         { type: { $in: typeCandidates } },
+//       ],
+//     })
+//       .select("_id number type")
+//       .lean();
+
+//     if (!candidates.length) {
+//       return res.status(200).json({
+//         message: `No QRs found for type "${rawType}" on this branch.`,
+//         deleted: 0,
+//         deletedNumbers: [],
+//         newQrGenerated: branch.qrGenerated ?? 0,
+//       });
+//     }
+
+//     candidates.sort((a, b) => suffixOf(b.number) - suffixOf(a.number));
+//     const toDelete = candidates.slice(0, Math.min(count, candidates.length));
+//     const ids = toDelete.map(d => d._id);
+//     const deletedNumbers = toDelete.map(d => String(d.number || ""));
+
+//     if (ids.length === 0) {
+//       return res.status(200).json({
+//         message: `Nothing to delete for type "${rawType}".`,
+//         deleted: 0,
+//         deletedNumbers: [],
+//         newQrGenerated: branch.qrGenerated ?? 0,
+//       });
+//     }
+
+//     // 7) Delete selected docs
+//     const delRes = await QrCode.deleteMany({ _id: { $in: ids } });
+//     const actuallyDeleted = delRes?.deletedCount || 0;
+
+//     // 8) Decrement counters (total and per-type), clamped to >= 0
+//     const incField = rawType === "table" ? "qrGeneratedTable" : "qrGeneratedRoom";
+//     if (actuallyDeleted > 0) {
+//       const fresh = await Branch.findById(branch._id, "qrGenerated qrGeneratedTable qrGeneratedRoom").lean();
+//       const currentTotal = Number(fresh?.qrGenerated ?? 0);
+//       const currentType  = Number(fresh?.[incField] ?? 0);
+//       const nextTotal = Math.max(0, currentTotal - actuallyDeleted);
+//       const nextType  = Math.max(0, currentType - actuallyDeleted);
+//       await Branch.findByIdAndUpdate(branch._id, { $set: { qrGenerated: nextTotal, [incField]: nextType } });
+//     }
+
+//     const after = await Branch.findById(branch._id, "qrGenerated").lean();
+
+//     return res.status(200).json({
+//       message: `Deleted ${actuallyDeleted} ${rawType} QR(s) from the top.`,
+//       type: rawType === "table" ? "Table" : "Room",
+//       deleted: actuallyDeleted,
+//       deletedNumbers, // e.g. ["table-11", "table-10", ...]
+//       newQrGenerated: Number(after?.qrGenerated ?? 0),
+//     });
+//   } catch (err) {
+//     console.error("QR Delete Error:", err);
+//     return res.status(500).json({ message: err.message });
+//   }
+// };
 
 
 
