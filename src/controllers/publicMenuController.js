@@ -139,10 +139,9 @@ export const getPublicSectionItemsGrouped = async (req, res) => {
     const query = { branchId, sectionKey, isActive: true, isAvailable: true };
 
     const items = await MenuItem.find(query)
-  .sort({ sortOrder: 1, nameEnglish: 1 })
-  .skip(skip)
-  .limit(limit)
-  .lean();
+      .sort({ sortOrder: 1, nameEnglish: 1 })
+      .limit(hardCap)
+      .lean();
 
     // Group by itemType (fallback to "UNCATEGORIZED" if empty)
     const map = new Map(); // itemType -> array
