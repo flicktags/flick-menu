@@ -5,7 +5,7 @@ import { verifyFirebaseToken } from "../middlewares/authMiddleware.js";
 
 const vendorRouter = express.Router();
 vendorRouter.post("/register", registerVendor);
-router.patch("/profile", verifyFirebaseToken, updateMyVendor);
+vendorRouter.patch("/profile", verifyFirebaseToken, updateMyVendor);
 
 
 export default vendorRouter;
