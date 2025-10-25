@@ -68,6 +68,95 @@ export const registerBranch = async (req, res) => {
   }
 };
 
+
+// controllers/branchController.js
+export const listBranchesByVendor = async (req, res) => {
+  try {
+    const uid = req.user?.uid; // from verifyFirebaseToken
+    if (!uid) return res.status(401).json({ message: "Unauthorized" });
+
+    // Accept vendorId from /vendor/:vendorId or ?vendorId=
+    let vendorId = req.params.vendorId || req.query.vendorId;
+    // NEW: accept branchId as an exact match filter
+    const branchId = (req.query.branchId || "").toString().trim();
+
+    // Pagination
+    const page  = Math.max(parseInt(req.query.page || "1", 10), 1);
+    const limit = Math.min(Math.max(parseInt(req.query.limit || "20", 10), 1), 100);
+    const skip  = (page - 1) * limit;
+
+    const status = req.query.status?.toString().trim();
+    const q      = req.query.q?.toString().trim();
+
+    let baseFilter = {};
+    let resolvedVendorId = vendorId || null;
+
+    if (vendorId) {
+      const vendor = await Vendor.findOne({ vendorId }).lean();
+      if (!vendor) return res.status(404).json({ message: "Vendor not found" });
+
+      if (vendor.userId === uid) {
+        // Vendor owner → all branches in this vendor
+        baseFilter = { vendorId };
+      } else {
+        // Branch manager must own at least one branch in this vendor
+        const ownsAny = await Branch.exists({ vendorId, userId: uid });
+        if (!ownsAny) {
+          return res.status(403).json({ message: "Forbidden: you do not own this vendor" });
+        }
+        baseFilter = { vendorId, userId: uid };
+      }
+    } else {
+      // Infer from user
+      const ownerVendor = await Vendor.findOne({ userId: uid }).lean();
+      if (ownerVendor) {
+        resolvedVendorId = ownerVendor.vendorId;
+        baseFilter = { vendorId: ownerVendor.vendorId };
+      } else {
+        // Branch manager across vendors
+        baseFilter = { userId: uid };
+      }
+    }
+
+    // Compose final filter
+    const filter = { ...baseFilter };
+
+    // NEW: branchId exact match (if provided)
+    if (branchId) {
+      filter.branchId = branchId;
+    }
+
+    if (status) filter.status = status;
+
+    if (q) {
+      filter.$or = [
+        { branchId:        { $regex: q, $options: "i" } },
+        { nameEnglish:     { $regex: q, $options: "i" } },
+        { nameArabic:      { $regex: q, $options: "i" } },
+        { "address.city":  { $regex: q, $options: "i" } },
+      ];
+    }
+
+    const [items, total] = await Promise.all([
+      Branch.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
+      Branch.countDocuments(filter),
+    ]);
+
+    return res.json({
+      vendorId: resolvedVendorId,
+      page,
+      limit,
+      total,
+      totalPages: Math.ceil(total / limit),
+      items,
+    });
+  } catch (err) {
+    console.error("List branches error:", err);
+    return res.status(500).json({ message: err.message });
+  }
+};
+
+
 // export const listBranchesByVendor = async (req, res) => {
 //   try {
 //     const uid = req.user?.uid; // from verifyFirebaseToken
@@ -129,86 +218,86 @@ export const registerBranch = async (req, res) => {
 
 
 // controllers/branchController.js
-export const listBranchesByVendor = async (req, res) => {
-  try {
-    const uid = req.user?.uid; // from verifyFirebaseToken
-    if (!uid) return res.status(401).json({ message: "Unauthorized" });
+// export const listBranchesByVendor = async (req, res) => {
+//   try {
+//     const uid = req.user?.uid; // from verifyFirebaseToken
+//     if (!uid) return res.status(401).json({ message: "Unauthorized" });
 
-    // vendorId can be passed or inferred from the authenticated user
-    let vendorId = req.params.vendorId || req.query.vendorId;
+//     // vendorId can be passed or inferred from the authenticated user
+//     let vendorId = req.params.vendorId || req.query.vendorId;
 
-    // Optional filters & pagination
-    const page  = Math.max(parseInt(req.query.page || "1", 10), 1);
-    const limit = Math.min(Math.max(parseInt(req.query.limit || "20", 10), 1), 100);
-    const skip  = (page - 1) * limit;
+//     // Optional filters & pagination
+//     const page  = Math.max(parseInt(req.query.page || "1", 10), 1);
+//     const limit = Math.min(Math.max(parseInt(req.query.limit || "20", 10), 1), 100);
+//     const skip  = (page - 1) * limit;
 
-    const status = req.query.status?.trim();
-    const q      = req.query.q?.trim();
+//     const status = req.query.status?.trim();
+//     const q      = req.query.q?.trim();
 
-    let baseFilter = {};
-    let resolvedVendorId = vendorId || null;
+//     let baseFilter = {};
+//     let resolvedVendorId = vendorId || null;
 
-    if (vendorId) {
-      // When vendorId is provided, allow:
-      // - vendor owner (full access)
-      // - branch manager with at least one branch in that vendor (restricted to their branches)
-      const vendor = await Vendor.findOne({ vendorId }).lean();
-      if (!vendor) return res.status(404).json({ message: "Vendor not found" });
+//     if (vendorId) {
+//       // When vendorId is provided, allow:
+//       // - vendor owner (full access)
+//       // - branch manager with at least one branch in that vendor (restricted to their branches)
+//       const vendor = await Vendor.findOne({ vendorId }).lean();
+//       if (!vendor) return res.status(404).json({ message: "Vendor not found" });
 
-      if (vendor.userId === uid) {
-        // Vendor owner -> all branches of this vendor
-        baseFilter = { vendorId };
-      } else {
-        // Branch manager? Must own at least one branch under this vendor
-        const ownsAny = await Branch.exists({ vendorId, userId: uid });
-        if (!ownsAny) {
-          return res.status(403).json({ message: "Forbidden: you do not own this vendor" });
-        }
-        // Restrict to manager's own branches within this vendor
-        baseFilter = { vendorId, userId: uid };
-      }
-    } else {
-      // No vendorId provided: infer
-      // 1) Vendor owner -> use their vendorId and return all branches
-      const ownerVendor = await Vendor.findOne({ userId: uid }).lean();
-      if (ownerVendor) {
-        resolvedVendorId = ownerVendor.vendorId;
-        baseFilter = { vendorId: ownerVendor.vendorId };
-      } else {
-        // 2) Branch manager -> list only their branches (may span vendors)
-        baseFilter = { userId: uid };
-      }
-    }
+//       if (vendor.userId === uid) {
+//         // Vendor owner -> all branches of this vendor
+//         baseFilter = { vendorId };
+//       } else {
+//         // Branch manager? Must own at least one branch under this vendor
+//         const ownsAny = await Branch.exists({ vendorId, userId: uid });
+//         if (!ownsAny) {
+//           return res.status(403).json({ message: "Forbidden: you do not own this vendor" });
+//         }
+//         // Restrict to manager's own branches within this vendor
+//         baseFilter = { vendorId, userId: uid };
+//       }
+//     } else {
+//       // No vendorId provided: infer
+//       // 1) Vendor owner -> use their vendorId and return all branches
+//       const ownerVendor = await Vendor.findOne({ userId: uid }).lean();
+//       if (ownerVendor) {
+//         resolvedVendorId = ownerVendor.vendorId;
+//         baseFilter = { vendorId: ownerVendor.vendorId };
+//       } else {
+//         // 2) Branch manager -> list only their branches (may span vendors)
+//         baseFilter = { userId: uid };
+//       }
+//     }
 
-    const filter = { ...baseFilter };
-    if (status) filter.status = status;
-    if (q) {
-      filter.$or = [
-        { branchId:        { $regex: q, $options: "i" } },
-        { nameEnglish:     { $regex: q, $options: "i" } },
-        { nameArabic:      { $regex: q, $options: "i" } },
-        { "address.city":  { $regex: q, $options: "i" } },
-      ];
-    }
+//     const filter = { ...baseFilter };
+//     if (status) filter.status = status;
+//     if (q) {
+//       filter.$or = [
+//         { branchId:        { $regex: q, $options: "i" } },
+//         { nameEnglish:     { $regex: q, $options: "i" } },
+//         { nameArabic:      { $regex: q, $options: "i" } },
+//         { "address.city":  { $regex: q, $options: "i" } },
+//       ];
+//     }
 
-    const [items, total] = await Promise.all([
-      Branch.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
-      Branch.countDocuments(filter),
-    ]);
+//     const [items, total] = await Promise.all([
+//       Branch.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
+//       Branch.countDocuments(filter),
+//     ]);
 
-    return res.json({
-      vendorId: resolvedVendorId, // may be null if listing across vendors for a branch manager
-      page,
-      limit,
-      total,
-      totalPages: Math.ceil(total / limit),
-      items,
-    });
-  } catch (err) {
-    console.error("List branches error:", err);
-    return res.status(500).json({ message: err.message });
-  }
-};
+//     return res.json({
+//       vendorId: resolvedVendorId, // may be null if listing across vendors for a branch manager
+//       page,
+//       limit,
+//       total,
+//       totalPages: Math.ceil(total / limit),
+//       items,
+//     });
+//   } catch (err) {
+//     console.error("List branches error:", err);
+//     return res.status(500).json({ message: err.message });
+//   }
+// };
 
 
 const loadBranchByPublicId = async (branchId) => {
