@@ -155,151 +155,6 @@ export const listBranchesByVendor = async (req, res) => {
     return res.status(500).json({ message: err.message });
   }
 };
-
-
-// export const listBranchesByVendor = async (req, res) => {
-//   try {
-//     const uid = req.user?.uid; // from verifyFirebaseToken
-//     if (!uid) return res.status(401).json({ message: "Unauthorized" });
-
-//     // vendorId can be passed or inferred from the authenticated user
-//     let vendorId = req.params.vendorId || req.query.vendorId;
-
-//     let vendor;
-//     if (vendorId) {
-//       vendor = await Vendor.findOne({ vendorId });
-//       if (!vendor) return res.status(404).json({ message: "Vendor not found" });
-//       if (vendor.userId !== uid) {
-//         return res.status(403).json({ message: "Forbidden: you do not own this vendor" });
-//       }
-//     } else {
-//       vendor = await Vendor.findOne({ userId: uid });
-//       if (!vendor) return res.status(404).json({ message: "No vendor found for this user" });
-//       vendorId = vendor.vendorId;
-//     }
-
-//     // Optional filters & pagination
-//     const page  = Math.max(parseInt(req.query.page || "1", 10), 1);
-//     const limit = Math.min(Math.max(parseInt(req.query.limit || "20", 10), 1), 100);
-//     const skip  = (page - 1) * limit;
-
-//     const status = req.query.status?.trim();
-//     const q      = req.query.q?.trim();
-
-//     const filter = { vendorId };
-//     if (status) filter.status = status;
-//     if (q) {
-//       filter.$or = [
-//         { branchId:        { $regex: q, $options: "i" } },
-//         { nameEnglish:     { $regex: q, $options: "i" } },
-//         { nameArabic:      { $regex: q, $options: "i" } },
-//         { "address.city":  { $regex: q, $options: "i" } },
-//       ];
-//     }
-
-//     const [items, total] = await Promise.all([
-//       Branch.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
-//       Branch.countDocuments(filter),
-//     ]);
-
-//     return res.json({
-//       vendorId,
-//       page,
-//       limit,
-//       total,
-//       totalPages: Math.ceil(total / limit),
-//       items,
-//     });
-//   } catch (err) {
-//     console.error("List branches error:", err);
-//     return res.status(500).json({ message: err.message });
-//   }
-// };
-
-
-// controllers/branchController.js
-// export const listBranchesByVendor = async (req, res) => {
-//   try {
-//     const uid = req.user?.uid; // from verifyFirebaseToken
-//     if (!uid) return res.status(401).json({ message: "Unauthorized" });
-
-//     // vendorId can be passed or inferred from the authenticated user
-//     let vendorId = req.params.vendorId || req.query.vendorId;
-
-//     // Optional filters & pagination
-//     const page  = Math.max(parseInt(req.query.page || "1", 10), 1);
-//     const limit = Math.min(Math.max(parseInt(req.query.limit || "20", 10), 1), 100);
-//     const skip  = (page - 1) * limit;
-
-//     const status = req.query.status?.trim();
-//     const q      = req.query.q?.trim();
-
-//     let baseFilter = {};
-//     let resolvedVendorId = vendorId || null;
-
-//     if (vendorId) {
-//       // When vendorId is provided, allow:
-//       // - vendor owner (full access)
-//       // - branch manager with at least one branch in that vendor (restricted to their branches)
-//       const vendor = await Vendor.findOne({ vendorId }).lean();
-//       if (!vendor) return res.status(404).json({ message: "Vendor not found" });
-
-//       if (vendor.userId === uid) {
-//         // Vendor owner -> all branches of this vendor
-//         baseFilter = { vendorId };
-//       } else {
-//         // Branch manager? Must own at least one branch under this vendor
-//         const ownsAny = await Branch.exists({ vendorId, userId: uid });
-//         if (!ownsAny) {
-//           return res.status(403).json({ message: "Forbidden: you do not own this vendor" });
-//         }
-//         // Restrict to manager's own branches within this vendor
-//         baseFilter = { vendorId, userId: uid };
-//       }
-//     } else {
-//       // No vendorId provided: infer
-//       // 1) Vendor owner -> use their vendorId and return all branches
-//       const ownerVendor = await Vendor.findOne({ userId: uid }).lean();
-//       if (ownerVendor) {
-//         resolvedVendorId = ownerVendor.vendorId;
-//         baseFilter = { vendorId: ownerVendor.vendorId };
-//       } else {
-//         // 2) Branch manager -> list only their branches (may span vendors)
-//         baseFilter = { userId: uid };
-//       }
-//     }
-
-//     const filter = { ...baseFilter };
-//     if (status) filter.status = status;
-//     if (q) {
-//       filter.$or = [
-//         { branchId:        { $regex: q, $options: "i" } },
-//         { nameEnglish:     { $regex: q, $options: "i" } },
-//         { nameArabic:      { $regex: q, $options: "i" } },
-//         { "address.city":  { $regex: q, $options: "i" } },
-//       ];
-//     }
-
-//     const [items, total] = await Promise.all([
-//       Branch.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
-//       Branch.countDocuments(filter),
-//     ]);
-
-//     return res.json({
-//       vendorId: resolvedVendorId, // may be null if listing across vendors for a branch manager
-//       page,
-//       limit,
-//       total,
-//       totalPages: Math.ceil(total / limit),
-//       items,
-//     });
-//   } catch (err) {
-//     console.error("List branches error:", err);
-//     return res.status(500).json({ message: err.message });
-//   }
-// };
-
-
 const loadBranchByPublicId = async (branchId) => {
   const branch = await Branch.findOne({ branchId }).lean(false); // lean(false) => real doc for save()
   return branch;
@@ -320,6 +175,153 @@ const ensureCanManageBranch = async (req, branch) => {
 
   return false;
 };
+
+
+
+/**
+ * PATCH /api/branches/:branchId
+ * Auth: Firebase (verifyFirebaseToken)
+ * Body: partial fields only (we merge)
+ *
+ * Supports:
+ * - nameEnglish, nameArabic, venueType, status
+ * - serviceFeatures: ["dine_in","takeaway","delivery"]
+ * - openingHours: { Mon:"09:00-22:00" | "Closed", ... } // subset allowed
+ *   (also accepts {Mon:{closed:true}} or {Mon:{open:"09:00", close:"22:00"}})
+ * - contact: { email?, phone? }
+ * - address: { addressLine?, city?, state?, countryCode?, mapPlaceId?, coordinates?: { lat?, lng? } }
+ * - timeZone, currency
+ * - branding: { logo?, coverBannerLogo? }
+ * - taxes: { vatPercentage?, serviceChargePercentage? }
+ * - qrSettings: { qrsAllowed?, noOfQrs? }
+ * - subscription: { plan?, expiryDate? (ISO) }
+ */
+
+export const updateBranchInformation = async (req, res) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ message: "Unauthorized" });
+
+    const { branchId } = req.params;
+    if (!branchId) return res.status(400).json({ message: "branchId is required" });
+
+    const branch = await loadBranchByPublicId(branchId);
+    if (!branch) return res.status(404).json({ message: "Branch not found" });
+
+    if (!(await ensureCanManageBranch(req, branch))) {
+      return res.status(403).json({ message: "Forbidden" });
+    }
+
+    const b = req.body || {};
+
+    // Basics
+    if (b.nameEnglish !== undefined) branch.nameEnglish = String(b.nameEnglish);
+    if (b.nameArabic  !== undefined) branch.nameArabic  = String(b.nameArabic);
+    if (b.venueType   !== undefined) branch.venueType   = String(b.venueType);
+    if (b.status      !== undefined) branch.status      = String(b.status);
+
+    // Service features (replace if provided)
+    if (Array.isArray(b.serviceFeatures)) {
+      branch.serviceFeatures = b.serviceFeatures.filter((x) => _SERVICE.has(String(x)));
+    }
+
+    // Opening hours: merge days only provided
+    if (b.openingHours && typeof b.openingHours === "object") {
+      branch.openingHours = branch.openingHours || {};
+      for (const [day, val] of Object.entries(b.openingHours)) {
+        if (!_DAYS.includes(day)) continue;
+        if (typeof val === "string") {
+          branch.openingHours[day] = val;
+        } else if (val && typeof val === "object") {
+          if (val.closed === true) {
+            branch.openingHours[day] = "Closed";
+          } else {
+            const open  = val.open  ?? "09:00";
+            const close = val.close ?? "22:00";
+            branch.openingHours[day] = `${open}-${close}`;
+          }
+        }
+      }
+    }
+
+    // Contact
+    if (b.contact && typeof b.contact === "object") {
+      branch.contact = branch.contact || {};
+      if (b.contact.email !== undefined) branch.contact.email = String(b.contact.email);
+      if (b.contact.phone !== undefined) branch.contact.phone = String(b.contact.phone);
+    }
+
+    // Address (+coordinates)
+    if (b.address && typeof b.address === "object") {
+      branch.address = branch.address || {};
+      const a = b.address;
+      if (a.addressLine  !== undefined) branch.address.addressLine  = String(a.addressLine);
+      if (a.city         !== undefined) branch.address.city         = String(a.city);
+      if (a.state        !== undefined) branch.address.state        = String(a.state);
+      if (a.countryCode  !== undefined) branch.address.countryCode  = String(a.countryCode);
+      if (a.mapPlaceId   !== undefined) branch.address.mapPlaceId   = a.mapPlaceId ? String(a.mapPlaceId) : null;
+
+      if (a.coordinates && typeof a.coordinates === "object") {
+        branch.address.coordinates = branch.address.coordinates || {};
+        if (a.coordinates.lat !== undefined) {
+          branch.address.coordinates.lat = a.coordinates.lat === null ? null : Number(a.coordinates.lat);
+        }
+        if (a.coordinates.lng !== undefined) {
+          branch.address.coordinates.lng = a.coordinates.lng === null ? null : Number(a.coordinates.lng);
+        }
+      }
+    }
+
+    // Meta
+    if (b.timeZone !== undefined) branch.timeZone = String(b.timeZone);
+    if (b.currency !== undefined) branch.currency = String(b.currency);
+
+    // Branding
+    if (b.branding && typeof b.branding === "object") {
+      branch.branding = branch.branding || {};
+      if (b.branding.logo !== undefined) branch.branding.logo = b.branding.logo ? String(b.branding.logo) : null;
+      if (b.branding.coverBannerLogo !== undefined) {
+        branch.branding.coverBannerLogo = b.branding.coverBannerLogo ? String(b.branding.coverBannerLogo) : null;
+      }
+    }
+
+    // Taxes
+    if (b.taxes && typeof b.taxes === "object") {
+      branch.taxes = branch.taxes || {};
+      if (b.taxes.vatPercentage !== undefined) branch.taxes.vatPercentage = Number(b.taxes.vatPercentage);
+      if (b.taxes.serviceChargePercentage !== undefined) {
+        branch.taxes.serviceChargePercentage = Number(b.taxes.serviceChargePercentage);
+      }
+    }
+
+    // QR Settings
+    if (b.qrSettings && typeof b.qrSettings === "object") {
+      branch.qrSettings = branch.qrSettings || {};
+      if (b.qrSettings.qrsAllowed !== undefined) branch.qrSettings.qrsAllowed = !!b.qrSettings.qrsAllowed;
+      if (b.qrSettings.noOfQrs !== undefined) branch.qrSettings.noOfQrs = Number(b.qrSettings.noOfQrs);
+    }
+
+    // Subscription
+    if (b.subscription && typeof b.subscription === "object") {
+      branch.subscription = branch.subscription || {};
+      if (b.subscription.plan !== undefined) branch.subscription.plan = String(b.subscription.plan);
+      if (b.subscription.expiryDate !== undefined) {
+        branch.subscription.expiryDate = b.subscription.expiryDate
+          ? new Date(b.subscription.expiryDate)
+          : null;
+      }
+    }
+
+    await branch.save();
+    const updated = await Branch.findById(branch._id).lean();
+
+    return res.json({ message: "Branch updated", branch: updated });
+  } catch (err) {
+    console.error("updateBranchInformation error:", err);
+    return res.status(500).json({ message: err.message });
+  }
+};
+
 
 // ---------- GET /api/branches/:branchId/menu/sections ----------
 export const getBranchMenuSections = async (req, res) => {
