@@ -35,6 +35,7 @@ const menuItemSchema = new Schema(
     nameEnglish: { type: String, required: true, trim: true },
     nameArabic: { type: String, required: true, trim: true },
     description: { type: String, default: "" },
+    descriptionArabic: { type: String, default: "" },
 
     imageUrl: { type: String, default: "" },
     videoUrl: { type: String, default: "" },

@@ -497,6 +497,7 @@ export const createMenuItem = async (req, res) => {
       nameEnglish: req.body.nameEnglish,
       nameArabic:  req.body.nameArabic,
       description: req.body.description ?? "",
+      descriptionArabic: req.body.descriptionArabic ?? "",
 
       imageUrl: req.body.imageUrl ?? "",
       videoUrl: req.body.videoUrl ?? "",
@@ -629,7 +630,7 @@ export const updateMenuItem = async (req, res) => {
       nameEnglish: req.body.nameEnglish ?? item.nameEnglish,
       nameArabic:  req.body.nameArabic  ?? item.nameArabic,
       description: req.body.description ?? item.description,
-
+      descriptionArabic: req.body.descriptionArabic ?? item.descriptionArabic,
       imageUrl: req.body.imageUrl ?? item.imageUrl,
       videoUrl: req.body.videoUrl ?? item.videoUrl,
 
