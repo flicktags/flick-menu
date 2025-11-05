@@ -29,11 +29,12 @@
 
 // export default mongoose.model("Vendor", vendorSchema);
 
+// models/Vendor.js
 import mongoose from "mongoose";
 
 const vendorSchema = new mongoose.Schema(
   {
-    userId: { type: String, required: true },           // Firebase UID (owner)
+    userId: { type: String, required: true },
     vendorId: { type: String, unique: true, required: true },
 
     businessName: { type: String },
@@ -47,21 +48,13 @@ const vendorSchema = new mongoose.Schema(
     logoUrl: { type: String },
     isActive: { type: Boolean, default: true },
 
-    // NEW: billing.vatNumber already existed; keep it and use it
     billing: {
-      vatNumber: { type: String },                      // e.g. "2663748849994"
+      vatNumber: { type: String },
     },
 
-    // NEW: taxes & settings (kept flexible and backward compatible)
+    // NEW: store a numeric VAT percentage for the vendor (0..100)
     taxes: {
-      // store as percentage (0..100) in DB; API can expose decimal via /public
-      vatPercentage: { type: Number, min: 0, max: 100, default: 0 },
-      serviceChargePercentage: { type: Number, min: 0, max: 100, default: 0 },
-    },
-
-    settings: {
-      // whether your base prices already include VAT
-      priceIncludesVat: { type: Boolean, default: false },
+      vatPercentage: { type: Number, min: 0, max: 100 }, // no default -> stays undefined unless you set it
     },
 
     updates: {
@@ -73,3 +66,4 @@ const vendorSchema = new mongoose.Schema(
 );
 
 export default mongoose.model("Vendor", vendorSchema);
+

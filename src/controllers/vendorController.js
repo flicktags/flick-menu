@@ -29,20 +29,16 @@
 //   }
 // };
 
+// controllers/vendorController.js
 import Vendor from "../models/Vendor.js";
 
 /**
  * PATCH /api/vendor/profile
  * Auth: Bearer Firebase ID token (verifyFirebaseToken sets req.user)
- *
- * Accepts (all optional):
- * {
- *   businessName, arabicbBusinessName, contactPhone, logoUrl,
- *   vatNumber,                       // or billing.vatNumber
- *   vatPercentage,                   // number 0..100
- *   serviceChargePercentage,         // number 0..100
- *   priceIncludesVat                 // boolean
- * }
+ * Body can include:
+ *  - businessName, arabicbBusinessName, contactPhone, logoUrl
+ *  - billing: { vatNumber }
+ *  - taxes: { vatPercentage }  // number (0..100)
  */
 export const updateMyVendor = async (req, res) => {
   try {
@@ -52,7 +48,7 @@ export const updateMyVendor = async (req, res) => {
     const vendor = await Vendor.findOne({ userId: uid });
     if (!vendor) return res.status(404).json({ message: "Vendor not found" });
 
-    // Shallow fields
+    // flat fields
     const allow = ["businessName", "arabicbBusinessName", "contactPhone", "logoUrl"];
     for (const k of allow) {
       if (Object.prototype.hasOwnProperty.call(req.body, k)) {
@@ -60,49 +56,36 @@ export const updateMyVendor = async (req, res) => {
       }
     }
 
-    // billing.vatNumber (accept flat or nested)
-    if (Object.prototype.hasOwnProperty.call(req.body, "vatNumber")) {
-      vendor.billing = vendor.billing || {};
-      vendor.billing.vatNumber = req.body.vatNumber || "";
-    }
+    // nested: billing.vatNumber
     if (req.body?.billing && Object.prototype.hasOwnProperty.call(req.body.billing, "vatNumber")) {
-      vendor.billing = vendor.billing || {};
-      vendor.billing.vatNumber = req.body.billing.vatNumber || "";
+      const vn = req.body.billing.vatNumber;
+      // allow clearing with null/empty string
+      vendor.set("billing.vatNumber", (vn === null || vn === undefined || String(vn).trim() === "") ? undefined : String(vn).trim());
     }
 
-    // taxes
-    const toNum = (v) => (v === "" || v === null || v === undefined ? undefined : Number(v));
-    const clamp01 = (n) => (isNaN(n) ? undefined : Math.max(0, Math.min(100, n)));
-
-    if (Object.prototype.hasOwnProperty.call(req.body, "vatPercentage")) {
-      const n = clamp01(toNum(req.body.vatPercentage));
-      if (n !== undefined) {
-        vendor.taxes = vendor.taxes || {};
-        vendor.taxes.vatPercentage = n;
+    // nested: taxes.vatPercentage (0..100)
+    if (req.body?.taxes && Object.prototype.hasOwnProperty.call(req.body.taxes, "vatPercentage")) {
+      let v = req.body.taxes.vatPercentage;
+      if (v === "" || v === null || v === undefined) {
+        // allow clearing to undefined (remove the value)
+        vendor.set("taxes.vatPercentage", undefined);
+      } else {
+        const num = Number(v);
+        if (Number.isFinite(num)) {
+          const bounded = Math.max(0, Math.min(100, num));
+          vendor.set("taxes.vatPercentage", bounded);
+        } else {
+          return res.status(400).json({ message: "taxes.vatPercentage must be a number" });
+        }
       }
-    }
-    if (Object.prototype.hasOwnProperty.call(req.body, "serviceChargePercentage")) {
-      const n = clamp01(toNum(req.body.serviceChargePercentage));
-      if (n !== undefined) {
-        vendor.taxes = vendor.taxes || {};
-        vendor.taxes.serviceChargePercentage = n;
-      }
-    }
-
-    // settings.priceIncludesVat
-    if (Object.prototype.hasOwnProperty.call(req.body, "priceIncludesVat")) {
-      vendor.settings = vendor.settings || {};
-      vendor.settings.priceIncludesVat = !!req.body.priceIncludesVat;
-    }
-    if (req.body?.settings && Object.prototype.hasOwnProperty.call(req.body.settings, "priceIncludesVat")) {
-      vendor.settings = vendor.settings || {};
-      vendor.settings.priceIncludesVat = !!req.body.settings.priceIncludesVat;
     }
 
     await vendor.save();
+    // return the updated vendor doc
     return res.json({ message: "Vendor updated", vendor });
   } catch (err) {
     console.error("updateMyVendor error:", err);
     return res.status(500).json({ message: err.message });
   }
 };
+
