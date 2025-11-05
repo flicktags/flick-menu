@@ -255,42 +255,32 @@ import Branch from "../models/Branch.js";
 import MenuItem from "../models/MenuItem.js";
 import Vendor from "../models/Vendor.js";
 
-// ---- helpers ---------------------------------------------------------------
-function normalizeCurrency(branch) {
-  // Prefer branch.currency object if present
-  const c = branch?.currency || {};
-  const code = c.code || branch?.currencyCode || "BHD";
-  const symbol = c.symbol || branch?.currencySymbol || "BD";
-  const fractionDigits =
-    typeof c.fractionDigits === "number"
-      ? c.fractionDigits
-      : typeof branch?.currencyFractionDigits === "number"
-      ? branch.currencyFractionDigits
-      : 3; // BHD commonly uses 3 dp
-
-  return { code, symbol, fractionDigits };
-}
-
+// -----------------------------------------------------------------------------
+// Build extra metadata (currency from branch as-is, VAT info from vendor)
 async function buildMetaForBranch(branch) {
-  const currency = normalizeCurrency(branch);
+  const currency = branch?.currency ?? null;
 
   let vendor = { vendorId: null, vatNumber: null, vatRate: null };
   let settings = undefined;
 
   if (branch?.vendorId) {
     const v = await Vendor.findOne({ vendorId: branch.vendorId })
-      .select("vendorId vatNumber vatRate priceIncludesVat")
+      .select("vendorId billing.vatNumber taxes.vatPercentage settings.priceIncludesVat")
       .lean();
 
     if (v) {
+      const vatPct =
+        typeof v?.taxes?.vatPercentage === "number" ? v.taxes.vatPercentage : null;
+
       vendor = {
         vendorId: v.vendorId || null,
-        vatNumber: v.vatNumber || null,
-        // Expecting a decimal like 0.10 (10%)
-        vatRate: typeof v.vatRate === "number" ? v.vatRate : null,
+        vatNumber: v?.billing?.vatNumber ?? null,
+        // expose decimal (e.g., 10% -> 0.10)
+        vatRate: vatPct !== null ? vatPct / 100 : null,
       };
-      if (typeof v.priceIncludesVat === "boolean") {
-        settings = { priceIncludesVat: v.priceIncludesVat };
+
+      if (typeof v?.settings?.priceIncludesVat === "boolean") {
+        settings = { priceIncludesVat: v.settings.priceIncludesVat };
       }
     }
   }
@@ -298,7 +288,8 @@ async function buildMetaForBranch(branch) {
   return { currency, vendor, settings };
 }
 
-// ---- GET /api/public/menu/sections?branch=... ------------------------------
+// -----------------------------------------------------------------------------
+// GET /api/public/menu/sections?branch=BR-000005
 export const getPublicMenuTypes = async (req, res) => {
   try {
     const branchId = String(req.query?.branch || "").trim();
@@ -307,7 +298,7 @@ export const getPublicMenuTypes = async (req, res) => {
     }
 
     const branch = await Branch.findOne({ branchId })
-      .select("branchId nameEnglish nameArabic menuSections vendorId currency currencyCode currencySymbol currencyFractionDigits")
+      .select("branchId vendorId nameEnglish nameArabic menuSections currency")
       .lean();
 
     if (!branch) return res.status(404).json({ message: "Branch not found" });
@@ -322,7 +313,6 @@ export const getPublicMenuTypes = async (req, res) => {
         icon: s.icon ?? undefined,
       }));
 
-    // Optional meta if you want it at this endpoint too (harmless extra fields)
     const meta = await buildMetaForBranch(branch);
 
     return res.json({
@@ -337,7 +327,8 @@ export const getPublicMenuTypes = async (req, res) => {
   }
 };
 
-// ---- GET /api/public/menu?branch=... ---------------------------------------
+// -----------------------------------------------------------------------------
+// GET /api/public/menu?branch=BR-000005
 export const getPublicMenu = async (req, res) => {
   try {
     const branchId = String(req.query?.branch || "").trim();
@@ -347,8 +338,7 @@ export const getPublicMenu = async (req, res) => {
 
     const branch = await Branch.findOne({ branchId })
       .select(
-        "branchId vendorId nameEnglish nameArabic currency taxes branding menuSections " +
-          "currencyCode currencySymbol currencyFractionDigits"
+        "branchId vendorId nameEnglish nameArabic currency taxes branding menuSections"
       )
       .lean();
 
@@ -369,7 +359,8 @@ export const getPublicMenu = async (req, res) => {
   }
 };
 
-// ---- GET /api/public/menu/items?branch=...&sectionKey=... -------------------
+// -----------------------------------------------------------------------------
+// GET /api/public/menu/items?branch=...&sectionKey=...&page=&limit=
 export const getPublicSectionItems = async (req, res) => {
   try {
     const branchId = String(req.query?.branch || "").trim();
@@ -383,7 +374,7 @@ export const getPublicSectionItems = async (req, res) => {
     }
 
     const branch = await Branch.findOne({ branchId })
-      .select("branchId vendorId currency currencyCode currencySymbol currencyFractionDigits")
+      .select("branchId vendorId currency")
       .lean();
     if (!branch) {
       return res.status(404).json({ message: "Branch not found" });
@@ -403,10 +394,10 @@ export const getPublicSectionItems = async (req, res) => {
       .limit(limit)
       .select(
         "_id branchId vendorId sectionKey sortOrder itemType " +
-        "nameEnglish nameArabic description descriptionArabic imageUrl videoUrl " +
-        "allergens tags isFeatured isActive isAvailable isSpicy " +
-        "calories sku preparationTimeInMinutes ingredients addons " +
-        "isSizedBased sizes fixedPrice offeredPrice discount createdAt updatedAt"
+          "nameEnglish nameArabic description descriptionArabic imageUrl videoUrl " +
+          "allergens tags isFeatured isActive isAvailable isSpicy " +
+          "calories sku preparationTimeInMinutes ingredients addons " +
+          "isSizedBased sizes fixedPrice offeredPrice discount createdAt updatedAt"
       )
       .lean();
 
@@ -428,20 +419,23 @@ export const getPublicSectionItems = async (req, res) => {
   }
 };
 
-// ---- GET /api/public/menu/section-grouped?branch=...&sectionKey=... --------
-// Optional: &limit=1000  (defaults to 1000)
+// -----------------------------------------------------------------------------
+// GET /api/public/menu/section-grouped?branch=...&sectionKey=...&limit=
 export const getPublicSectionItemsGrouped = async (req, res) => {
   try {
     const branchId = String(req.query?.branch || "").trim();
     const sectionKey = String(req.query?.sectionKey || "").trim();
-    const hardCap = Math.min(1000, Math.max(1, parseInt(String(req.query?.limit || "1000"), 10))); // return "all" by default, capped
+    const hardCap = Math.min(
+      1000,
+      Math.max(1, parseInt(String(req.query?.limit || "1000"), 10))
+    );
 
     if (!branchId || !sectionKey) {
       return res.status(400).json({ message: "branch and sectionKey are required" });
     }
 
     const branch = await Branch.findOne({ branchId })
-      .select("branchId vendorId currency currencyCode currencySymbol currencyFractionDigits")
+      .select("branchId vendorId currency")
       .lean();
     if (!branch) return res.status(404).json({ message: "Branch not found" });
 
@@ -452,15 +446,14 @@ export const getPublicSectionItemsGrouped = async (req, res) => {
       .limit(hardCap)
       .lean();
 
-    // Group by itemType (fallback to "UNCATEGORIZED" if empty)
-    const map = new Map(); // itemType -> array
+    // Group by itemType (fallback to "UNCATEGORIZED")
+    const map = new Map();
     for (const it of items) {
       const key = (it.itemType && String(it.itemType).trim()) || "UNCATEGORIZED";
       if (!map.has(key)) map.set(key, []);
       map.get(key).push(it);
     }
 
-    // Build array output (stable sort by itemType)
     const groups = Array.from(map.entries())
       .sort((a, b) => a[0].localeCompare(b[0]))
       .map(([itemType, list]) => ({
@@ -475,7 +468,7 @@ export const getPublicSectionItemsGrouped = async (req, res) => {
       branchId,
       sectionKey,
       totalItems: items.length,
-      ...meta, // <= currency + vendor + (optional) settings
+      ...meta,
       groups,
     });
   } catch (err) {
@@ -484,25 +477,30 @@ export const getPublicSectionItemsGrouped = async (req, res) => {
   }
 };
 
-// ---- GET /api/public/menu/catalog?branch=... [&maxPerSection=...] -----------
+// -----------------------------------------------------------------------------
+// GET /api/public/menu/catalog?branch=...&maxPerSection=
 export const getPublicBranchCatalog = async (req, res) => {
   try {
     const branchId = String(req.query?.branch || "").trim();
-    const maxPerSection = Math.min(2000, Math.max(1, parseInt(String(req.query?.maxPerSection || "1000"), 10)));
+    const maxPerSection = Math.min(
+      2000,
+      Math.max(1, parseInt(String(req.query?.maxPerSection || "1000"), 10))
+    );
 
     if (!branchId) {
       return res.status(400).json({ message: "branch is required (business id)" });
     }
 
     const branch = await Branch.findOne({ branchId })
-      .select("branchId vendorId nameEnglish nameArabic currency taxes branding menuSections currencyCode currencySymbol currencyFractionDigits")
+      .select(
+        "branchId vendorId nameEnglish nameArabic currency taxes branding menuSections"
+      )
       .lean();
 
     if (!branch) return res.status(404).json({ message: "Branch not found" });
 
     const enabledSections = (branch.menuSections || []).filter((s) => s.isEnabled === true);
 
-    // Pull items per section in parallel
     const sections = await Promise.all(
       enabledSections.map(async (s) => {
         const items = await MenuItem.find({
@@ -561,3 +559,4 @@ export const getPublicBranchCatalog = async (req, res) => {
     return res.status(500).json({ message: err.message });
   }
 };
+
