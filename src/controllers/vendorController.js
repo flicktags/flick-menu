@@ -30,6 +30,7 @@
 // };
 
 // controllers/vendorController.js
+// controllers/vendorController.js
 import Vendor from "../models/Vendor.js";
 
 /**
@@ -88,4 +89,5 @@ export const updateMyVendor = async (req, res) => {
     return res.status(500).json({ message: err.message });
   }
 };
+
 
