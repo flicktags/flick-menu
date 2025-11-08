@@ -199,10 +199,10 @@ export const getBranchQrs = async (req, res) => {
     }).lean();
 
     // Sort asc by type then numeric suffix (table-1, table-2, …)
-    const suffixOf = (numStr) => {
-      const m = /(\d+)$/.exec(String(numStr || ""));
-      return m ? parseInt(m[1], 10) : -Infinity;
-    };
+    // const suffixOf = (numStr) => {
+    //   const m = /(\d+)$/.exec(String(numStr || ""));
+    //   return m ? parseInt(m[1], 10) : -Infinity;
+    // };
 
     items.sort((a, b) => {
       const tA = String(a.type || "");
@@ -325,10 +325,10 @@ function isObjectId(id) {
   return mongoose.Types.ObjectId.isValid(String(id || ""));
 }
 
-function suffixOf(numStr) {
-  const m = /(\d+)$/.exec(String(numStr || ""));
-  return m ? parseInt(m[1], 10) : null;
-}
+// function suffixOf(numStr) {
+//   const m = /(\d+)$/.exec(String(numStr || ""));
+//   return m ? parseInt(m[1], 10) : null;
+// }
 
 function parseSeatFromQr({ type, number }) {
   const kind = String(type || "").toLowerCase(); // "table" | "room"
