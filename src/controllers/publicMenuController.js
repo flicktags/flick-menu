@@ -839,8 +839,6 @@ export const getPublicSectionItems = async (req, res) => {
 // ---------------------------------------------------------------------
 // GET /api/public/menu/section-grouped?branch=...&sectionKey=...&limit=
 // ALSO works with: /api/public/menu/section-grouped?qrId=QR-000138&sectionKey=...&limit=
-
-
 export const getPublicSectionItemsGrouped = async (req, res) => {
   try {
     const sectionKey = String(req.query?.sectionKey || "").trim();
@@ -859,57 +857,21 @@ export const getPublicSectionItemsGrouped = async (req, res) => {
       .limit(hardCap)
       .lean();
 
-    // ---- helpers (robust to different shapes) ----
-    const getFoodCategoryKey = (it) => {
-      const fc = it.foodCategory;
-      // supports: string, { key }, or separate foodCategoryKey
-      if (typeof fc === "string" && fc.trim()) return fc.trim();
-      if (fc && typeof fc === "object" && fc.key) return String(fc.key).trim();
-      if (it.foodCategoryKey) return String(it.foodCategoryKey).trim();
-      return "UNCATEGORIZED";
-    };
-
-    const getItemTypeKey = (it) => {
-      const t = it.itemType;
-      // supports: string or { key }
-      if (typeof t === "string" && t.trim()) return t.trim();
-      if (t && typeof t === "object" && t.key) return String(t.key).trim();
-      return "UNSPECIFIED";
-    };
-
-    // ---- group: foodCategory -> itemType -> items ----
-    const categoryMap = new Map(); // Map<foodCategory, Map<itemType, Item[]>>
-
+    // Group by itemType (fallback to "UNCATEGORIZED")
+    const map = new Map();
     for (const it of items) {
-      const fcKey = getFoodCategoryKey(it);
-      const itKey = getItemTypeKey(it);
-
-      if (!categoryMap.has(fcKey)) categoryMap.set(fcKey, new Map());
-      const typeMap = categoryMap.get(fcKey);
-
-      if (!typeMap.has(itKey)) typeMap.set(itKey, []);
-      typeMap.get(itKey).push(it);
+      const key = (it.itemType && String(it.itemType).trim()) || "UNCATEGORIZED";
+      if (!map.has(key)) map.set(key, []);
+      map.get(key).push(it);
     }
 
-    const groups = Array.from(categoryMap.entries())
+    const groups = Array.from(map.entries())
       .sort((a, b) => a[0].localeCompare(b[0]))
-      .map(([foodCategory, typeMap]) => {
-        const itemTypeGroups = Array.from(typeMap.entries())
-          .sort((a, b) => a[0].localeCompare(b[0]))
-          .map(([itemType, list]) => ({
-            itemType,
-            count: list.length,
-            items: list,
-          }));
-
-        const count = itemTypeGroups.reduce((sum, g) => sum + g.count, 0);
-
-        return {
-          foodCategory,
-          count,
-          itemTypeGroups,
-        };
-      });
+      .map(([itemType, list]) => ({
+        itemType,
+        count: list.length,
+        items: list,
+      }));
 
     const meta = await buildMetaForBranch(branch);
 
@@ -918,68 +880,15 @@ export const getPublicSectionItemsGrouped = async (req, res) => {
       sectionKey,
       totalItems: items.length,
       ...meta,
-      groups, // now: [{ foodCategory, count, itemTypeGroups: [{ itemType, count, items }] }]
+      groups,
     };
     if (qr) resp.qr = qr;
-
     return res.json(resp);
   } catch (err) {
     const status = err.status || 500;
     return res.status(status).json({ message: err.message || "Failed to load grouped items" });
   }
 };
-
-
-// export const getPublicSectionItemsGrouped = async (req, res) => {
-//   try {
-//     const sectionKey = String(req.query?.sectionKey || "").trim();
-//     if (!sectionKey) {
-//       return res.status(400).json({ message: "sectionKey is required" });
-//     }
-
-//     const hardCap = Math.min(1000, Math.max(1, parseInt(String(req.query?.limit || "1000"), 10)));
-
-//     const { branch, qr } = await resolveContext(req);
-
-//     const query = { branchId: branch.branchId, sectionKey, isActive: true, isAvailable: true };
-
-//     const items = await MenuItem.find(query)
-//       .sort({ sortOrder: 1, nameEnglish: 1 })
-//       .limit(hardCap)
-//       .lean();
-
-//     // Group by itemType (fallback to "UNCATEGORIZED")
-//     const map = new Map();
-//     for (const it of items) {
-//       const key = (it.itemType && String(it.itemType).trim()) || "UNCATEGORIZED";
-//       if (!map.has(key)) map.set(key, []);
-//       map.get(key).push(it);
-//     }
-
-//     const groups = Array.from(map.entries())
-//       .sort((a, b) => a[0].localeCompare(b[0]))
-//       .map(([itemType, list]) => ({
-//         itemType,
-//         count: list.length,
-//         items: list,
-//       }));
-
-//     const meta = await buildMetaForBranch(branch);
-
-//     const resp = {
-//       branchId: branch.branchId,
-//       sectionKey,
-//       totalItems: items.length,
-//       ...meta,
-//       groups,
-//     };
-//     if (qr) resp.qr = qr;
-//     return res.json(resp);
-//   } catch (err) {
-//     const status = err.status || 500;
-//     return res.status(status).json({ message: err.message || "Failed to load grouped items" });
-//   }
-// };
 
 // ---------------------------------------------------------------------
 // GET /api/public/menu/catalog?branch=...&maxPerSection=
