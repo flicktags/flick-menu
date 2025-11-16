@@ -378,7 +378,11 @@ export const getMenuItem = async (req, res) => {
 // ---------------- UPDATE ----------------
 export const updateMenuItem = async (req, res) => {
   try {
-    const id = req.params.id;
+    const id = (req.params.id || "").trim();
+    if (!id) {
+      return res.status(400).json({ code: "ID_REQUIRED", message: "Item id is required" });
+    }
+
     const item = await MenuItem.findById(id);
     if (!item) return res.status(404).json({ code: "NOT_FOUND", message: "Item not found" });
 
@@ -388,7 +392,19 @@ export const updateMenuItem = async (req, res) => {
       return res.status(403).json({ code: "FORBIDDEN", message: "You do not own this branch" });
     }
 
-    let newSectionKey = req.body.sectionKey ? toUpper(req.body.sectionKey) : item.sectionKey;
+    // ---- helpers (same semantics as create) ----
+    const asStr = (v, def = "") => (v == null ? def : String(v));
+    const asUpper = (v, def = "") => asStr(v, def).trim().toUpperCase();
+    const asBool = (v, def = false) =>
+      typeof v === "boolean" ? v : v == null ? def : !!v;
+    const asNum = (v, def = 0) => {
+      if (v === "" || v === null || v === undefined) return def;
+      const n = Number(v);
+      return Number.isFinite(n) ? n : def;
+    };
+
+    // Section move validation (if any)
+    const newSectionKey = req.body.sectionKey ? asUpper(req.body.sectionKey) : item.sectionKey;
     if (newSectionKey !== item.sectionKey) {
       const sec = (branch.menuSections || []).find((s) => s.key === newSectionKey);
       if (!sec || sec.isEnabled !== true) {
@@ -399,42 +415,90 @@ export const updateMenuItem = async (req, res) => {
       }
     }
 
+    // Build "next" state using PATCH semantics.
+    // If a field is omitted in body, keep existing.
     const next = {
-      itemType: req.body.itemType ?? item.itemType,
-      nameEnglish: req.body.nameEnglish ?? item.nameEnglish,
-      nameArabic:  req.body.nameArabic  ?? item.nameArabic,
-      description: req.body.description ?? item.description,
-      descriptionArabic: req.body.descriptionArabic ?? item.descriptionArabic,
-      imageUrl: req.body.imageUrl ?? item.imageUrl,
-      videoUrl: req.body.videoUrl ?? item.videoUrl,
+      itemType: req.body.itemType != null ? asStr(req.body.itemType).trim() : item.itemType,
+      nameEnglish: req.body.nameEnglish != null ? asStr(req.body.nameEnglish).trim() : item.nameEnglish,
+      nameArabic:  req.body.nameArabic  != null ? asStr(req.body.nameArabic).trim()  : item.nameArabic,
+      description: req.body.description != null ? asStr(req.body.description, "") : item.description,
+      descriptionArabic: req.body.descriptionArabic != null ? asStr(req.body.descriptionArabic, "") : item.descriptionArabic,
 
-      allergens: Array.isArray(req.body.allergens) ? req.body.allergens : item.allergens,
-      tags:      Array.isArray(req.body.tags)      ? req.body.tags      : item.tags,
+      imageUrl: req.body.imageUrl != null ? asStr(req.body.imageUrl, "") : item.imageUrl,
+      videoUrl: req.body.videoUrl != null ? asStr(req.body.videoUrl, "") : item.videoUrl,
 
-      isFeatured:  req.body.isFeatured  ?? item.isFeatured,
-      isActive:    req.body.isActive    ?? item.isActive,
-      isAvailable: req.body.isAvailable ?? item.isAvailable,
-      isSpicy:     req.body.isSpicy     ?? item.isSpicy,
+      allergens: Array.isArray(req.body.allergens) ? req.body.allergens.map(String) : item.allergens,
+      tags:      Array.isArray(req.body.tags)      ? req.body.tags.map(String)      : item.tags,
 
-      calories: req.body.calories ?? item.calories,
-      sku:      req.body.sku ?? item.sku,
-      preparationTimeInMinutes: req.body.preparationTimeInMinutes ?? item.preparationTimeInMinutes,
+      isFeatured:  req.body.isFeatured  != null ? asBool(req.body.isFeatured, item.isFeatured)     : item.isFeatured,
+      isActive:    req.body.isActive    != null ? asBool(req.body.isActive, item.isActive)         : item.isActive,
+      isAvailable: req.body.isAvailable != null ? asBool(req.body.isAvailable, item.isAvailable)   : item.isAvailable,
+      isSpicy:     req.body.isSpicy     != null ? asBool(req.body.isSpicy, item.isSpicy)           : item.isSpicy,
 
-      ingredients: Array.isArray(req.body.ingredients) ? req.body.ingredients : item.ingredients,
-      addons:      Array.isArray(req.body.addons)      ? req.body.addons      : item.addons,
+      calories: req.body.calories != null ? asNum(req.body.calories, item.calories) : item.calories,
+      sku:      req.body.sku      != null ? asStr(req.body.sku, "").trim()          : item.sku,
+      preparationTimeInMinutes:
+                req.body.preparationTimeInMinutes != null
+                  ? asNum(req.body.preparationTimeInMinutes, item.preparationTimeInMinutes)
+                  : item.preparationTimeInMinutes,
 
-      discount: req.body.discount !== undefined ? req.body.discount : item.discount,
+      ingredients: Array.isArray(req.body.ingredients) ? req.body.ingredients.map(String) : item.ingredients,
+      addons:      Array.isArray(req.body.addons)      ? req.body.addons                   : item.addons,
 
-      isSizedBased: req.body.isSizedBased ?? item.isSizedBased,
+      // discount PATCH rules:
+      // - omit => keep existing
+      // - null  => remove (set undefined)
+      // - object => replace
+      discount:
+        Object.prototype.hasOwnProperty.call(req.body, "discount")
+          ? (req.body.discount === null
+              ? undefined
+              : (typeof req.body.discount === "object" ? req.body.discount : item.discount))
+          : item.discount,
+
+      isSizedBased: req.body.isSizedBased != null ? asBool(req.body.isSizedBased, item.isSizedBased) : item.isSizedBased,
       sizes:        Array.isArray(req.body.sizes) ? req.body.sizes : item.sizes,
 
-      fixedPrice:   req.body.fixedPrice   != null ? Number(req.body.fixedPrice)   : item.fixedPrice,
-      offeredPrice: req.body.offeredPrice != null ? Number(req.body.offeredPrice) : item.offeredPrice,
+      fixedPrice:   req.body.fixedPrice   != null ? asNum(req.body.fixedPrice, item.fixedPrice)       : item.fixedPrice,
 
-      sortOrder: req.body.sortOrder != null ? Number(req.body.sortOrder) : item.sortOrder,
+      // offeredPrice PATCH rules (align with schema: undefined when "removed"):
+      // - omit => keep existing
+      // - "" or null => undefined (remove)
+      // - number/string => set Number
+      offeredPrice: Object.prototype.hasOwnProperty.call(req.body, "offeredPrice")
+        ? ((req.body.offeredPrice === "" || req.body.offeredPrice === null)
+            ? undefined
+            : Number(req.body.offeredPrice))
+        : item.offeredPrice,
+
+      sortOrder: req.body.sortOrder != null ? asNum(req.body.sortOrder, item.sortOrder) : item.sortOrder,
+
       sectionKey: newSectionKey,
     };
 
+    // ---------- NEW: Group-level category fields ----------
+    // Only update when explicitly present in body (so PATCH doesn't unintentionally blank them)
+    if (Object.prototype.hasOwnProperty.call(req.body, "foodCategoryGroupId")) {
+      next.foodCategoryGroupId =
+        req.body.foodCategoryGroupId ? String(req.body.foodCategoryGroupId) : null;
+    } else {
+      next.foodCategoryGroupId = item.foodCategoryGroupId;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(req.body, "foodCategoryGroupCode")) {
+      next.foodCategoryGroupCode = asUpper(req.body.foodCategoryGroupCode, "");
+    } else {
+      next.foodCategoryGroupCode = item.foodCategoryGroupCode;
+    }
+
+    if (Object.prototype.hasOwnProperty.call(req.body, "foodCategoryGroupNameEnglish")) {
+      next.foodCategoryGroupNameEnglish = asStr(req.body.foodCategoryGroupNameEnglish, "").trim();
+    } else {
+      next.foodCategoryGroupNameEnglish = item.foodCategoryGroupNameEnglish;
+    }
+    // ------------------------------------------------------
+
+    // Validate business rules (same checker you already use)
     const errors = validateBusinessRules(next);
     if (errors.length) {
       return res.status(400).json({ code: "VALIDATION_FAILED", message: "Invalid payload", errors });
@@ -454,9 +518,98 @@ export const updateMenuItem = async (req, res) => {
     return res.json({ message: "Menu item updated", item });
   } catch (err) {
     console.error("updateMenuItem error:", err);
-    return res.status(500).json({ code: "SERVER_ERROR", message: err.message });
+    return res.status(500).json({
+      code: "SERVER_ERROR",
+      message: err?.message || "Unexpected error",
+      details: err?.errors ? Object.keys(err.errors).reduce((o, k) => {
+        o[k] = err.errors[k]?.message;
+        return o;
+      }, {}) : undefined,
+    });
   }
 };
+
+// export const updateMenuItem = async (req, res) => {
+//   try {
+//     const id = req.params.id;
+//     const item = await MenuItem.findById(id);
+//     if (!item) return res.status(404).json({ code: "NOT_FOUND", message: "Item not found" });
+
+//     const branch = await Branch.findOne({ branchId: item.branchId }).lean(false);
+//     if (!branch) return res.status(404).json({ code: "BRANCH_NOT_FOUND", message: "Branch not found" });
+//     if (!(await userOwnsBranch(req, branch))) {
+//       return res.status(403).json({ code: "FORBIDDEN", message: "You do not own this branch" });
+//     }
+
+//     let newSectionKey = req.body.sectionKey ? toUpper(req.body.sectionKey) : item.sectionKey;
+//     if (newSectionKey !== item.sectionKey) {
+//       const sec = (branch.menuSections || []).find((s) => s.key === newSectionKey);
+//       if (!sec || sec.isEnabled !== true) {
+//         return res.status(400).json({
+//           code: "SECTION_NOT_ENABLED",
+//           message: `Menu section '${newSectionKey}' is not enabled on branch ${branch.branchId}`,
+//         });
+//       }
+//     }
+
+//     const next = {
+//       itemType: req.body.itemType ?? item.itemType,
+//       nameEnglish: req.body.nameEnglish ?? item.nameEnglish,
+//       nameArabic:  req.body.nameArabic  ?? item.nameArabic,
+//       description: req.body.description ?? item.description,
+//       descriptionArabic: req.body.descriptionArabic ?? item.descriptionArabic,
+//       imageUrl: req.body.imageUrl ?? item.imageUrl,
+//       videoUrl: req.body.videoUrl ?? item.videoUrl,
+
+//       allergens: Array.isArray(req.body.allergens) ? req.body.allergens : item.allergens,
+//       tags:      Array.isArray(req.body.tags)      ? req.body.tags      : item.tags,
+
+//       isFeatured:  req.body.isFeatured  ?? item.isFeatured,
+//       isActive:    req.body.isActive    ?? item.isActive,
+//       isAvailable: req.body.isAvailable ?? item.isAvailable,
+//       isSpicy:     req.body.isSpicy     ?? item.isSpicy,
+
+//       calories: req.body.calories ?? item.calories,
+//       sku:      req.body.sku ?? item.sku,
+//       preparationTimeInMinutes: req.body.preparationTimeInMinutes ?? item.preparationTimeInMinutes,
+
+//       ingredients: Array.isArray(req.body.ingredients) ? req.body.ingredients : item.ingredients,
+//       addons:      Array.isArray(req.body.addons)      ? req.body.addons      : item.addons,
+
+//       discount: req.body.discount !== undefined ? req.body.discount : item.discount,
+
+//       isSizedBased: req.body.isSizedBased ?? item.isSizedBased,
+//       sizes:        Array.isArray(req.body.sizes) ? req.body.sizes : item.sizes,
+
+//       fixedPrice:   req.body.fixedPrice   != null ? Number(req.body.fixedPrice)   : item.fixedPrice,
+//       offeredPrice: req.body.offeredPrice != null ? Number(req.body.offeredPrice) : item.offeredPrice,
+
+//       sortOrder: req.body.sortOrder != null ? Number(req.body.sortOrder) : item.sortOrder,
+//       sectionKey: newSectionKey,
+//     };
+
+//     const errors = validateBusinessRules(next);
+//     if (errors.length) {
+//       return res.status(400).json({ code: "VALIDATION_FAILED", message: "Invalid payload", errors });
+//     }
+
+//     const prevSection = item.sectionKey;
+//     const prevActive  = item.isActive;
+
+//     Object.assign(item, next);
+//     await item.save();
+
+//     await refreshSectionActiveCount(branch, prevSection);
+//     if (newSectionKey !== prevSection || prevActive !== item.isActive) {
+//       await refreshSectionActiveCount(branch, newSectionKey);
+//     }
+
+//     return res.json({ message: "Menu item updated", item });
+//   } catch (err) {
+//     console.error("updateMenuItem error:", err);
+//     return res.status(500).json({ code: "SERVER_ERROR", message: err.message });
+//   }
+// };
 
 // ---------------- DELETE ----------------
 export const deleteMenuItem = async (req, res) => {
