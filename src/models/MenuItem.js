@@ -146,8 +146,11 @@ const menuItemSchema = new Schema(
     isSizedBased: { type: Boolean, default: false },
     sizes: { type: [sizeSchema], default: [] },
     fixedPrice: { type: Number, default: 0, min: 0 },
-    offeredPrice: { type: Number, default: null, min: 0 },
 
+    // IMPORTANT: leave undefined (not null) when absent to avoid Number cast/min issues
+    offeredPrice: { type: Number, min: 0, default: undefined },
+
+    // discount subdoc should be undefined (absent) when not provided
     discount: { type: discountSchema, default: undefined },
 
     // ---------- NEW: Group-level category fields ----------
@@ -159,10 +162,7 @@ const menuItemSchema = new Schema(
   { timestamps: true }
 );
 
-// Existing index
 menuItemSchema.index({ branchId: 1, sectionKey: 1, sortOrder: 1, nameEnglish: 1 });
-
-// Helpful for filtering by group in a section
 menuItemSchema.index({ sectionKey: 1, foodCategoryGroupCode: 1, isActive: 1 });
 
 export default model("MenuItem", menuItemSchema);

@@ -97,16 +97,34 @@ async function refreshSectionActiveCount(branch, sectionKey) {
 
 // ---------------- CREATE (body-based) ----------------
 
+/** small coercion helpers */
+const asStr = (v, def = "") => (v == null ? def : String(v));
+const asUpper = (v, def = "") => asStr(v, def).trim().toUpperCase();
+const asBool = (v, def = false) => (typeof v === "boolean" ? v : !!v);
+const asNum = (v, def = 0) => {
+  if (v === "" || v === null || v === undefined) return def;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : def;
+};
+/** use undefined (not null) for optional fields with validators */
+const asOptionalNumber = (v) => {
+  if (v === "" || v === null || v === undefined) return undefined;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : undefined;
+};
+const asArrayOfStrings = (v) => (Array.isArray(v) ? v.map((x) => String(x)) : []);
+
 export const createMenuItem = async (req, res) => {
   try {
-    const branchId = String(req.body.branchId || "").trim();
-    const sectionKey = toUpper(req.body.sectionKey || "");
+    const branchId = asStr(req.body.branchId).trim();
+    const sectionKey = asUpper(req.body.sectionKey);
 
-    if (!branchId)  return res.status(400).json({ code: "BRANCH_ID_REQUIRED", message: "branchId is required" });
+    if (!branchId) return res.status(400).json({ code: "BRANCH_ID_REQUIRED", message: "branchId is required" });
     if (!sectionKey) return res.status(400).json({ code: "SECTION_KEY_REQUIRED", message: "sectionKey is required" });
 
     const branch = await Branch.findOne({ branchId }).lean(false);
     if (!branch) return res.status(404).json({ code: "BRANCH_NOT_FOUND", message: "Branch not found" });
+
     if (!(await userOwnsBranch(req, branch))) {
       return res.status(403).json({ code: "FORBIDDEN", message: "You do not own this branch" });
     }
@@ -114,7 +132,7 @@ export const createMenuItem = async (req, res) => {
     if (req.body.vendorId && String(req.body.vendorId) !== branch.vendorId) {
       return res.status(400).json({
         code: "VENDOR_MISMATCH",
-        message: "vendorId in body does not match branch.vendorId"
+        message: "vendorId in body does not match branch.vendorId",
       });
     }
 
@@ -123,79 +141,93 @@ export const createMenuItem = async (req, res) => {
       return res.status(400).json({
         code: "SECTION_NOT_ENABLED",
         message: `Menu section '${sectionKey}' is not enabled on branch ${branchId}`,
-        details: { enabledSections: (branch.menuSections || []).filter(s => s.isEnabled).map(s => s.key) }
+        details: { enabledSections: (branch.menuSections || []).filter((s) => s.isEnabled).map((s) => s.key) },
       });
     }
 
-    // ---- New category/group fields from frontend ----
-    // (child category fields intentionally NOT saved per your decision)
-    const foodCategoryGroupId = String(req.body.foodCategoryGroupId ?? "").trim() || null; // keep null if not provided
-    const foodCategoryGroupCode = toUpper(req.body.foodCategoryGroupCode || "");           // e.g. MAIN / DESSERTS
-    const foodCategoryGroupNameEnglish = String(req.body.foodCategoryGroupNameEnglish || "").trim();
-
+    // Build payload with safe coercions
     const payload = {
       branchId,
       vendorId: branch.vendorId,
       sectionKey,
 
-      // Core
-      itemType: req.body.itemType,
-      nameEnglish: req.body.nameEnglish,
-      nameArabic:  req.body.nameArabic,
-      description: req.body.description ?? "",
-      descriptionArabic: req.body.descriptionArabic ?? "",
+      itemType: asStr(req.body.itemType).trim(),
+      nameEnglish: asStr(req.body.nameEnglish).trim(),
+      nameArabic: asStr(req.body.nameArabic).trim(),
+      description: asStr(req.body.description, ""),
+      descriptionArabic: asStr(req.body.descriptionArabic, ""),
 
-      // Media
-      imageUrl: req.body.imageUrl ?? "",
-      videoUrl: req.body.videoUrl ?? "",
+      imageUrl: asStr(req.body.imageUrl, ""),
+      videoUrl: asStr(req.body.videoUrl, ""),
 
-      // Labels
-      allergens: Array.isArray(req.body.allergens) ? req.body.allergens : [],
-      tags:      Array.isArray(req.body.tags)      ? req.body.tags      : [],
+      allergens: asArrayOfStrings(req.body.allergens),
+      tags: asArrayOfStrings(req.body.tags),
 
-      // Flags
-      isFeatured:  !!req.body.isFeatured,
-      isActive:     req.body.isActive     !== false,
-      isAvailable:  req.body.isAvailable  !== false,
-      isSpicy:      !!req.body.isSpicy,
+      isFeatured: asBool(req.body.isFeatured, false),
+      isActive: req.body.isActive !== false,
+      isAvailable: req.body.isAvailable !== false,
+      isSpicy: asBool(req.body.isSpicy, false),
 
-      // Meta
-      calories: req.body.calories ?? 0,
-      sku:      req.body.sku ?? "",
-      preparationTimeInMinutes: req.body.preparationTimeInMinutes ?? 0,
+      calories: asNum(req.body.calories, 0),
+      sku: asStr(req.body.sku, "").trim(),
+      preparationTimeInMinutes: asNum(req.body.preparationTimeInMinutes, 10),
 
-      // Composition
-      ingredients: Array.isArray(req.body.ingredients) ? req.body.ingredients : [],
-      addons:      Array.isArray(req.body.addons)      ? req.body.addons      : [],
+      ingredients: asArrayOfStrings(req.body.ingredients),
+      addons: Array.isArray(req.body.addons) ? req.body.addons : [],
 
-      // Pricing
-      discount: req.body.discount || null,
-      isSizedBased: !!req.body.isSizedBased,
-      sizes:        Array.isArray(req.body.sizes) ? req.body.sizes : [],
-      fixedPrice:   Number(req.body.fixedPrice ?? 0),
-      offeredPrice: req.body.offeredPrice != null ? Number(req.body.offeredPrice) : null,
+      // IMPORTANT: undefined (not null) when not present
+      discount:
+        req.body.discount && typeof req.body.discount === "object" ? req.body.discount : undefined,
 
-      // Sort
-      sortOrder: Number(req.body.sortOrder ?? 0),
+      isSizedBased: asBool(req.body.isSizedBased, false),
+      sizes: Array.isArray(req.body.sizes) ? req.body.sizes : [],
 
-      // ---- Persist only group-level fields (as requested) ----
-      foodCategoryGroupId,           // string or null
-      foodCategoryGroupCode,         // UPPERCASE string
-      foodCategoryGroupNameEnglish,  // English display name
+      fixedPrice: asNum(req.body.fixedPrice, 0),
+      offeredPrice: asOptionalNumber(req.body.offeredPrice),
+
+      sortOrder: asNum(req.body.sortOrder, 0),
+
+      // ---------- NEW FIELDS (Group-level category) ----------
+      foodCategoryGroupId:
+        req.body.foodCategoryGroupId ? String(req.body.foodCategoryGroupId) : null,
+      foodCategoryGroupCode: asUpper(req.body.foodCategoryGroupCode, ""),
+      foodCategoryGroupNameEnglish: asStr(req.body.foodCategoryGroupNameEnglish, "").trim(),
+      // -------------------------------------------------------
     };
 
-    const errors = validateBusinessRules(payload);
+    // Log payload once for debugging (remove if noisy)
+    console.log("[createMenuItem] payload:", JSON.stringify(payload));
+
+    // Business rules check (keep this if you have it)
+    const errors = validateBusinessRules ? validateBusinessRules(payload) : [];
     if (errors.length) {
-      return res.status(400).json({ code: "VALIDATION_FAILED", message: "Invalid payload", errors });
+      return res.status(400).json({
+        code: "VALIDATION_FAILED",
+        message: "Invalid payload",
+        errors,
+      });
     }
 
     const item = await MenuItem.create(payload);
-    await refreshSectionActiveCount(branch, sectionKey);
+    // Optional: refresh section stats if you have this util
+    // await refreshSectionActiveCount(branch, sectionKey);
 
     return res.status(201).json({ message: "Menu item created", item });
   } catch (err) {
     console.error("createMenuItem error:", err);
-    return res.status(500).json({ code: "SERVER_ERROR", message: err.message });
+    // Bubble up Mongoose validation/cast details to help debugging
+    return res.status(500).json({
+      code: "SERVER_ERROR",
+      message: err?.message || "Unexpected error",
+      details: err?.errors ? Object.keys(err.errors).reduce((o, k) => {
+        o[k] = err.errors[k]?.message;
+        return o;
+      }, {}) : undefined,
+      name: err?.name,
+      kind: err?.kind,
+      path: err?.path,
+      value: err?.value
+    });
   }
 };
 
