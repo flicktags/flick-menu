@@ -27,6 +27,8 @@ import {
   getPublicMenuTypes,
   getPublicSectionItemsGrouped,
   getPublicBranchCatalog,
+  getPublicGroupedTree, // ✅ NEW
+
 } from "../controllers/publicMenuController.js";
 
 const router = express.Router();
@@ -38,5 +40,7 @@ router.get("/menu/sections", getPublicMenuTypes);
 router.get("/menu/items", getPublicSectionItems);
 router.get("/menu/section-grouped", getPublicSectionItemsGrouped);
 router.get("/menu/catalog", getPublicBranchCatalog);
+router.get("/menu/grouped-tree", getPublicGroupedTree);
+
 
 export default router;
