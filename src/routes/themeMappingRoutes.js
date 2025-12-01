@@ -4,7 +4,7 @@ import { verifyFirebaseToken } from "../middlewares/authMiddleware.js";
 import {
   getThemeMappingVendor,
   upsertThemeMappingVendor,
-} from "../controller/themeMappingController.js";
+} from "../controllers/themeMappingController.js";
 
 const router = express.Router();
 
