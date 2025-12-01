@@ -11,7 +11,7 @@ import menuItemRoutes from "./routes/menuItemRoutes.js";
 import QrCodeRouter from "./routes/qrRoutes.js";
 import publicRoutes from "./routes/publicRoutes.js";
 import ordersRoutes from "./routes/ordersRoutes.js";
-import themeMappingRoutes from "./router/themeMappingRoutes.js";
+import themeMappingRoutes from "./routes/themeMappingRoutes.js";
 
 
 
@@ -33,7 +33,7 @@ app.use("/api/menu", menuItemRoutes);
 app.use("/api/qrcode", QrCodeRouter);
 app.use("/api/public", publicRoutes);
 app.use("/api/orders", ordersRoutes);
-app.use("/api/vendor", themeMappingRoutes); // << add this
+app.use("/api/vendor", themeMappingRoutes);
 
 
 
