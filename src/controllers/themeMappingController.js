@@ -1,5 +1,6 @@
 // controller/themeMappingController.js
-import ThemeMapping from "../model/ThemeMapping.js";
+import ThemeMapping from "../models/ThemeMapping.js"
+
 import Branch from "../models/Branch.js";
 import Vendor from "../models/Vendor.js";
 
