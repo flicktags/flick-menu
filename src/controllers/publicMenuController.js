@@ -406,6 +406,8 @@ import Branch from "../models/Branch.js";
 import MenuItem from "../models/MenuItem.js";
 import Vendor from "../models/Vendor.js";
 import QrCode from "../models/QrCodeOrders.js"; // ✅ for QR-aware mode
+import ThemeMapping from "../models/ThemeMapping.js";
+
 
 // -----------------------------------------------------------------------------
 // Meta (currency + vendor VAT + settings)
@@ -898,5 +900,110 @@ export const getPublicGroupedTree = async (req, res) => {
     return res
       .status(status)
       .json({ message: err.message || "Failed to load items grouped by food category" });
+  }
+};
+
+
+
+
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PUBLIC: GET /api/public/menu/theme-mapping
+// Accepts either ?branch=BR-xxxxx or ?qrId=QR-xxxxx (same as other public endpoints)
+// Requires: sectionKey
+// Returns: { vendorId, branchId, sectionKey, itemTypeDesignMap, serverTime }
+// 404 when no mapping record exists for the section.
+// ─────────────────────────────────────────────────────────────────────────────
+export const getPublicThemeMapping = async (req, res) => {
+  try {
+    const { branch } = await resolveContext(req);
+
+    const sectionKey = String(req.query?.sectionKey || "").trim().toUpperCase();
+    if (!sectionKey) {
+      return res.status(400).json({ message: "sectionKey is required" });
+    }
+
+    const doc = await ThemeMapping.findOne({
+      vendorId: branch.vendorId,
+      branchId: branch.branchId, // business id
+      sectionKey,
+    })
+      .select("vendorId branchId sectionKey itemTypeDesignMap updatedAt")
+      .lean();
+
+    if (!doc) {
+      return res.status(404).json({ message: "Theme mapping not found" });
+    }
+
+    // Normalize codes to "01".."08" just in case
+    const allowed = new Set(["01","02","03","04","05","06","07","08"]);
+    const clean = {};
+    for (const [k, v] of Object.entries(Object.fromEntries(doc.itemTypeDesignMap || {}))) {
+      const vv = String(v || "").padStart(2, "0");
+      clean[k] = allowed.has(vv) ? vv : "01";
+    }
+
+    return res.json({
+      vendorId: doc.vendorId,
+      branchId: doc.branchId,
+      sectionKey: doc.sectionKey,
+      itemTypeDesignMap: clean,
+      serverTime: new Date().toISOString(),
+    });
+  } catch (err) {
+    const status = err.status || 500;
+    return res.status(status).json({ message: err.message || "Failed to load theme mapping" });
+  }
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PUBLIC: GET /api/public/menu/theme-mapping/all
+// Returns ALL mappings for a branch (all sectionKeys) in one payload.
+// Accepts either ?branch=BR-xxxxx or ?qrId=QR-xxxxx
+// Shape:
+// {
+//   vendorId, branchId, count,
+//   records: [{ sectionKey, itemTypeDesignMap, updatedAt }, ...],
+//   serverTime
+// }
+// ─────────────────────────────────────────────────────────────────────────────
+export const getPublicThemeMappingAll = async (req, res) => {
+  try {
+    const { branch } = await resolveContext(req);
+
+    const rows = await ThemeMapping.find({
+      vendorId: branch.vendorId,
+      branchId: branch.branchId,
+    })
+      .select("sectionKey itemTypeDesignMap updatedAt")
+      .sort({ sectionKey: 1 })
+      .lean();
+
+    const allowed = new Set(["01","02","03","04","05","06","07","08"]);
+
+    const records = rows.map((r) => {
+      const clean = {};
+      for (const [k, v] of Object.entries(Object.fromEntries(r.itemTypeDesignMap || {}))) {
+        const vv = String(v || "").padStart(2, "0");
+        clean[k] = allowed.has(vv) ? vv : "01";
+      }
+      return {
+        sectionKey: r.sectionKey,
+        itemTypeDesignMap: clean,
+        updatedAt: r.updatedAt,
+      };
+    });
+
+    return res.json({
+      vendorId: branch.vendorId,
+      branchId: branch.branchId,
+      count: records.length,
+      records,
+      serverTime: new Date().toISOString(),
+    });
+  } catch (err) {
+    const status = err.status || 500;
+    return res.status(status).json({ message: err.message || "Failed to load theme mappings" });
   }
 };

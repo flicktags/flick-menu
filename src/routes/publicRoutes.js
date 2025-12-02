@@ -28,6 +28,8 @@ import {
   getPublicSectionItemsGrouped,
   getPublicBranchCatalog,
   getPublicGroupedTree, // ✅ NEW
+  getPublicThemeMapping,
+  getPublicThemeMappingAll,
 
 } from "../controllers/publicMenuController.js";
 
@@ -41,6 +43,9 @@ router.get("/menu/items", getPublicSectionItems);
 router.get("/menu/section-grouped", getPublicSectionItemsGrouped);
 router.get("/menu/catalog", getPublicBranchCatalog);
 router.get("/menu/grouped-tree", getPublicGroupedTree);
+// ⬇️ NEW (no auth):
+router.get("/menu/theme-mapping", getPublicThemeMapping);       // one section
+router.get("/menu/theme-mapping/all", getPublicThemeMappingAll); // all sections
 
 
 export default router;
