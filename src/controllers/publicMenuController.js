@@ -409,6 +409,28 @@ import QrCode from "../models/QrCodeOrders.js"; // ✅ for QR-aware mode
 import ThemeMapping from "../models/ThemeMapping.js";
 
 
+// Safely get [key, value] pairs from Map | Object | null
+function entriesOf(maybeMapOrObj) {
+  if (!maybeMapOrObj) return [];
+  if (maybeMapOrObj instanceof Map) return Array.from(maybeMapOrObj.entries());
+  if (typeof maybeMapOrObj === "object" && !Array.isArray(maybeMapOrObj)) {
+    return Object.entries(maybeMapOrObj);
+  }
+  return [];
+}
+
+// Force codes to 01..08 and return a plain object
+function normalizeItemTypeDesignMap(raw) {
+  const allowed = new Set(["01","02","03","04","05","06","07","08"]);
+  const out = {};
+  for (const [k, v] of entriesOf(raw)) {
+    const vv = String(v || "").padStart(2, "0");
+    out[k] = allowed.has(vv) ? vv : "01";
+  }
+  return out;
+}
+
+
 // -----------------------------------------------------------------------------
 // Meta (currency + vendor VAT + settings)
 async function buildMetaForBranch(branch) {
@@ -936,24 +958,22 @@ export const getPublicThemeMapping = async (req, res) => {
       return res.status(404).json({ message: "Theme mapping not found" });
     }
 
-    // Normalize codes to "01".."08" just in case
-    const allowed = new Set(["01","02","03","04","05","06","07","08"]);
-    const clean = {};
-    for (const [k, v] of Object.entries(Object.fromEntries(doc.itemTypeDesignMap || {}))) {
-      const vv = String(v || "").padStart(2, "0");
-      clean[k] = allowed.has(vv) ? vv : "01";
-    }
+    // Normalize regardless of Map/Object shape, ensure codes are "01".."08"
+    const clean = normalizeItemTypeDesignMap(doc.itemTypeDesignMap);
 
     return res.json({
       vendorId: doc.vendorId,
       branchId: doc.branchId,
       sectionKey: doc.sectionKey,
       itemTypeDesignMap: clean,
+      updatedAt: doc.updatedAt,
       serverTime: new Date().toISOString(),
     });
   } catch (err) {
     const status = err.status || 500;
-    return res.status(status).json({ message: err.message || "Failed to load theme mapping" });
+    return res
+      .status(status)
+      .json({ message: err.message || "Failed to load theme mapping" });
   }
 };
 
