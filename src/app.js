@@ -38,7 +38,7 @@ app.use("/api/vendor", themeMappingRoutes);
 
 // --- Public branch redirect route ---
 // IMPORTANT: This must be BEFORE the Flutter static serving
-app.get("/:slug", publicBranchRedirect);
+app.get("/api/public/branch/redirect/:slug", publicBranchRedirect);
 
 import path from "path";
 app.use(express.static(path.join(process.cwd(), "build/web")));
