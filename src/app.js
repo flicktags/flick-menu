@@ -41,9 +41,12 @@ app.use("/api/vendor", themeMappingRoutes);
 app.get("/api/public/branch/redirect/:slug", publicBranchRedirect);
 
 import path from "path";
-app.use(express.static(path.join(process.cwd(), "build/web")));
-app.get("*", (req, res) => {
-  res.sendFile(path.join(process.cwd(), "build/web/index.html"));
+const webBuildPath = path.join(process.cwd(), "build/web");
+app.use(express.static(webBuildPath));
+
+// Catch-all SPA fallback (for Flutter routing)
+app.get("/*", (req, res) => {
+  res.sendFile(path.join(webBuildPath, "index.html"));
 });
 
 //Defualt route if not found
