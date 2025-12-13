@@ -13,7 +13,8 @@ import publicRoutes from "./routes/publicRoutes.js";
 import ordersRoutes from "./routes/ordersRoutes.js";
 import themeMappingRoutes from "./routes/themeMappingRoutes.js";
 
-
+// New redirect import
+import { publicBranchRedirect } from "./routes/publicRedirect.js";
 
 const app = express();
 
@@ -35,8 +36,15 @@ app.use("/api/public", publicRoutes);
 app.use("/api/orders", ordersRoutes);
 app.use("/api/vendor", themeMappingRoutes);
 
+// --- Public branch redirect route ---
+// IMPORTANT: This must be BEFORE the Flutter static serving
+app.get("/:slug", publicBranchRedirect);
 
-
+import path from "path";
+app.use(express.static(path.join(process.cwd(), "build/web")));
+app.get("*", (req, res) => {
+  res.sendFile(path.join(process.cwd(), "build/web/index.html"));
+});
 
 //Defualt route if not found
 app.use((req, res) => {
