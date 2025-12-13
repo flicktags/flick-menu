@@ -88,6 +88,7 @@ const menuSectionSchema = new mongoose.Schema(
 const branchSchema = new mongoose.Schema(
   {
     branchId: { type: String, unique: true, required: true },
+    publicSlug: { type: String, unique: true, sparse: true }, // e.g., "X223-4kkfkk482jjdjjlk2344-5666"
     vendorId: { type: String, required: true },
     userId: { type: String, required: true },
     nameEnglish: { type: String, required: true },

@@ -155,6 +155,7 @@ export const listBranchesByVendor = async (req, res) => {
     return res.status(500).json({ message: err.message });
   }
 };
+
 const loadBranchByPublicId = async (branchId) => {
   const branch = await Branch.findOne({ branchId }).lean(false); // lean(false) => real doc for save()
   return branch;
