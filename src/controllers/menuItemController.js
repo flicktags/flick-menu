@@ -2,6 +2,8 @@
 import MenuItem from "../models/MenuItem.js";
 import Branch from "../models/Branch.js";
 import Vendor from "../models/Vendor.js";
+import { touchBranchMenuStampByBizId } from "../utils/touchMenuStamp.js";
+
 
 // ---------------- helpers ----------------
 const toUpper = (v) => (typeof v === "string" ? v.toUpperCase().trim() : "");
@@ -209,6 +211,9 @@ export const createMenuItem = async (req, res) => {
     }
 
     const item = await MenuItem.create(payload);
+
+    await touchBranchMenuStampByBizId(branchId);
+
     // Optional: refresh section stats if you have this util
     // await refreshSectionActiveCount(branch, sectionKey);
 
@@ -428,6 +433,7 @@ export const updateMenuItem = async (req, res) => {
     if (newSectionKey !== prevSection || prevActive !== item.isActive) {
       await refreshSectionActiveCount(branch, newSectionKey);
     }
+    await touchBranchMenuStampByBizId(branch.branchId);
 
     return res.json({ message: "Menu item updated", item });
   } catch (err) {
@@ -460,6 +466,7 @@ export const deleteMenuItem = async (req, res) => {
     await item.deleteOne();
 
     await refreshSectionActiveCount(branch, sectionKey);
+    await touchBranchMenuStampByBizId(branch.branchId);
 
     return res.json({ message: "Menu item deleted", id });
   } catch (err) {

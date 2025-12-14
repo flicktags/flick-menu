@@ -461,6 +461,12 @@ async function buildMetaForBranch(branch) {
   }
   return { currency, vendor, settings };
 }
+function buildMenuStamp(branch) {
+  return {
+    menuVersion: typeof branch?.menuVersion === "number" ? branch.menuVersion : 1,
+    menuUpdatedAt: branch?.menuUpdatedAt ? new Date(branch.menuUpdatedAt).toISOString() : null,
+  };
+}
 
 // -----------------------------------------------------------------------------
 // Helpers for QR-aware flow (still under /api/public/*)
@@ -601,6 +607,7 @@ export const getPublicMenuTypes = async (req, res) => {
       branchId: branch.branchId,
       sections,
       ...meta,
+      menuStamp: buildMenuStamp(branch), // ✅ NEW
       serverTime: new Date().toISOString(),
     };
     if (qr) resp.qr = qr; // include seat info only when QR is used
@@ -632,6 +639,7 @@ export const getPublicMenu = async (req, res) => {
         menuSections: branch.menuSections,
       },
       ...meta,
+      menuStamp: buildMenuStamp(branch), // ✅ NEW
       serverTime: new Date().toISOString(),
     };
     if (qr) resp.qr = qr;
@@ -689,6 +697,7 @@ export const getPublicSectionItems = async (req, res) => {
       total,
       totalPages: Math.ceil(total / limit),
       ...meta,
+      menuStamp: buildMenuStamp(branch), // ✅ NEW
       items,
     };
     if (qr) resp.qr = qr;
@@ -743,6 +752,7 @@ export const getPublicSectionItemsGrouped = async (req, res) => {
       sectionKey,
       totalItems: items.length,
       ...meta,
+      menuStamp: buildMenuStamp(branch), // ✅ NEW
       groups,
     };
     if (qr) resp.qr = qr;
@@ -817,6 +827,7 @@ export const getPublicBranchCatalog = async (req, res) => {
         branding: branch.branding ?? undefined,
       },
       ...meta,
+      menuStamp: buildMenuStamp(branch), // ✅ NEW
       sections,
       serverTime: new Date().toISOString(),
     };
@@ -911,6 +922,7 @@ export const getPublicGroupedTree = async (req, res) => {
       },
       sectionsTouched: Array.from(sectionsTouched).filter(Boolean).sort(),
       ...meta,
+      menuStamp: buildMenuStamp(branch), // ✅ NEW
       tree, // shape: { "Mains": { "Burger": [...], "Pizza": [...] }, "Desserts": { ... } }
       serverTime: new Date().toISOString(),
     };
@@ -967,6 +979,7 @@ export const getPublicThemeMapping = async (req, res) => {
       sectionKey: doc.sectionKey,
       itemTypeDesignMap: clean,
       updatedAt: doc.updatedAt,
+      menuStamp: buildMenuStamp(branch), // ✅ NEW
       serverTime: new Date().toISOString(),
     });
   } catch (err) {
@@ -1020,6 +1033,7 @@ export const getPublicThemeMappingAll = async (req, res) => {
       branchId: branch.branchId,
       count: records.length,
       records,
+      menuStamp: buildMenuStamp(branch), // ✅ NEW
       serverTime: new Date().toISOString(),
     });
   } catch (err) {

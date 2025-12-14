@@ -116,6 +116,8 @@ const branchSchema = new mongoose.Schema(
     qrLimit: { type: Number, default: 0 }, 
     qrGenerated: { type: Number, default: 0 }, // how many generated so far
     status: { type: String, enum: ["active", "inactive", "archived"], default: "active" },
+    menuVersion: { type: Number, default: 1 },
+    menuUpdatedAt: { type: Date, default: Date.now },
   },
   { timestamps: true }
 );
