@@ -3,6 +3,17 @@ import Branch from "../models/Branch.js";
 import Vendor from "../models/Vendor.js";
 import MenuType from "../models/MenuType.js"; // for default names on enable
 import { generateBranchId } from "../utils/generateBranchId.js";
+import { generatePublicSlug } from "../utils/generatePublicSlug.js"; // ✅ NEW
+
+
+async function generateUniquePublicSlug(maxTries = 12) {
+  for (let i = 0; i < maxTries; i++) {
+    const slug = generatePublicSlug();
+    const exists = await Branch.exists({ publicSlug: slug });
+    if (!exists) return slug;
+  }
+  throw new Error("Failed to generate unique publicSlug");
+}
 
 export const registerBranch = async (req, res) => {
   try {
@@ -38,12 +49,16 @@ export const registerBranch = async (req, res) => {
       return res.status(404).json({ message: "Vendor not found" });
     }
 
+
+
     // generate branchId
     const branchId = await generateBranchId();
+    const publicSlug = await generateUniquePublicSlug(); // ✅ NEW
 
     // create branch
     const branch = await Branch.create({
       branchId,
+      publicSlug, // ✅ NEW
       vendorId,
       userId,
       nameEnglish,
@@ -131,6 +146,7 @@ export const listBranchesByVendor = async (req, res) => {
     if (q) {
       filter.$or = [
         { branchId:        { $regex: q, $options: "i" } },
+        { publicSlug:      { $regex: q, $options: "i" } },
         { nameEnglish:     { $regex: q, $options: "i" } },
         { nameArabic:      { $regex: q, $options: "i" } },
         { "address.city":  { $regex: q, $options: "i" } },
@@ -176,27 +192,6 @@ const ensureCanManageBranch = async (req, branch) => {
 
   return false;
 };
-
-
-
-/**
- * PATCH /api/branches/:branchId
- * Auth: Firebase (verifyFirebaseToken)
- * Body: partial fields only (we merge)
- *
- * Supports:
- * - nameEnglish, nameArabic, venueType, status
- * - serviceFeatures: ["dine_in","takeaway","delivery"]
- * - openingHours: { Mon:"09:00-22:00" | "Closed", ... } // subset allowed
- *   (also accepts {Mon:{closed:true}} or {Mon:{open:"09:00", close:"22:00"}})
- * - contact: { email?, phone? }
- * - address: { addressLine?, city?, state?, countryCode?, mapPlaceId?, coordinates?: { lat?, lng? } }
- * - timeZone, currency
- * - branding: { logo?, coverBannerLogo? }
- * - taxes: { vatPercentage?, serviceChargePercentage? }
- * - qrSettings: { qrsAllowed?, noOfQrs? }
- * - subscription: { plan?, expiryDate? (ISO) }
- */
 
 export const updateBranchInformation = async (req, res) => {
   try {
