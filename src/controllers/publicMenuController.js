@@ -198,9 +198,57 @@ async function resolveContext(req) {
 // ---------------------------------------------------------------------
 // GET /api/public/menu/sections?branch=BR-000005
 // ALSO works with: /api/public/menu/sections?qrId=QR-000138
+// export const getPublicMenuTypes = async (req, res) => {
+//   try {
+//     const { branch, qr } = await resolveContext(req);
+
+//     const sections = (branch.menuSections || [])
+//       .filter((s) => s.isEnabled === true)
+//       .map((s) => ({
+//         key: s.key,
+//         nameEnglish: s.nameEnglish,
+//         nameArabic: s.nameArabic,
+//         itemCount: s.itemCount ?? undefined,
+//         icon: s.icon ?? undefined,
+//       }));
+
+//     const meta = await buildMetaForBranch(branch);
+
+//     const resp = {
+//       branchId: branch.branchId,
+//       // ✅ NEW: branch operational info in SAME response
+//       branch: buildPublicBranchInfo(branch),
+//       sections,
+//       ...meta,
+//       menuStamp: buildMenuStamp(branch), // ✅ NEW
+//       serverTime: new Date().toISOString(),
+//     };
+//     if (qr) resp.qr = qr; // include seat info only when QR is used
+//     return res.json(resp);
+//   } catch (err) {
+//     const status = err.status || 500;
+//     return res.status(status).json({ message: err.message || "Failed to load sections" });
+//   }
+// };
+
+
+// GET /api/public/menu/sections?branch=BR-000005
+// Optional: ?stampOnly=1  -> returns only menuStamp + serverTime
 export const getPublicMenuTypes = async (req, res) => {
   try {
     const { branch, qr } = await resolveContext(req);
+
+    // ✅ NEW: stampOnly mode (very light payload)
+    const stampOnly = String(req.query?.stampOnly || "").trim() === "1";
+    if (stampOnly) {
+      const resp = {
+        branchId: branch.branchId,
+        menuStamp: buildMenuStamp(branch),
+        serverTime: new Date().toISOString(),
+      };
+      if (qr) resp.qr = qr;
+      return res.json(resp);
+    }
 
     const sections = (branch.menuSections || [])
       .filter((s) => s.isEnabled === true)
@@ -216,14 +264,24 @@ export const getPublicMenuTypes = async (req, res) => {
 
     const resp = {
       branchId: branch.branchId,
-      // ✅ NEW: branch operational info in SAME response
-      branch: buildPublicBranchInfo(branch),
+      branch: {
+        branchId: branch.branchId,
+        vendorId: branch.vendorId,
+        nameEnglish: branch.nameEnglish,
+        nameArabic: branch.nameArabic,
+        timeZone: branch.timeZone,
+        currency: branch.currency,
+        serviceFeatures: branch.serviceFeatures || [],
+        openingHours: branch.openingHours || {},
+        contact: branch.contact || {},
+      },
       sections,
       ...meta,
-      menuStamp: buildMenuStamp(branch), // ✅ NEW
+      menuStamp: buildMenuStamp(branch),
       serverTime: new Date().toISOString(),
     };
-    if (qr) resp.qr = qr; // include seat info only when QR is used
+
+    if (qr) resp.qr = qr;
     return res.json(resp);
   } catch (err) {
     const status = err.status || 500;
