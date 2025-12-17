@@ -103,7 +103,11 @@ const branchSchema = new mongoose.Schema(
     },
     timeZone: String,
     currency: String,
-    branding: { logo: String, coverBannerLogo: String },
+    branding: { 
+      logo: String, 
+      coverBannerLogo: String, 
+      splashScreenEnabled: { type: Boolean, default: false },
+ },
     taxes: { vatPercentage: Number, serviceChargePercentage: Number },
     qrSettings: { qrsAllowed: { type: Boolean, default: true }, noOfQrs: { type: Number, default: 0 } },
     subscription: { plan: String, expiryDate: Date },

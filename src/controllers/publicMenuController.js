@@ -274,6 +274,12 @@ export const getPublicMenuTypes = async (req, res) => {
         serviceFeatures: branch.serviceFeatures || [],
         openingHours: branch.openingHours || {},
         contact: branch.contact || {},
+         // ✅ NEW
+        branding: {
+          logo: branch.branding?.logo ?? null,
+          coverBannerLogo: branch.branding?.coverBannerLogo ?? null,
+          splashScreenEnabled: branch.branding?.splashScreenEnabled === true,
+        },
       },
       sections,
       ...meta,
