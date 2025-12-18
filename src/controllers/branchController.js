@@ -286,6 +286,9 @@ export const updateBranchInformation = async (req, res) => {
       if (b.branding.coverBannerLogo !== undefined) {
         branch.branding.coverBannerLogo = b.branding.coverBannerLogo ? String(b.branding.coverBannerLogo) : null;
       }
+      if (b.branding.splashScreenEnabled !== undefined) {
+    branch.branding.splashScreenEnabled = !!b.branding.splashScreenEnabled;
+  }
     }
 
     // Taxes
