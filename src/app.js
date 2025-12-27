@@ -12,6 +12,8 @@ import QrCodeRouter from "./routes/qrRoutes.js";
 import publicRoutes from "./routes/publicRoutes.js";
 import ordersRoutes from "./routes/ordersRoutes.js";
 import themeMappingRoutes from "./routes/themeMappingRoutes.js";
+import vendorCustomMenuTypesRoutes from "./routes/vendorCustomMenuTypesRoutes.js";
+
 
 // New redirect import
 import { publicBranchRedirect } from "./routes/publicRedirect.js";
@@ -35,6 +37,8 @@ app.use("/api/qrcode", QrCodeRouter);
 app.use("/api/public", publicRoutes);
 app.use("/api/orders", ordersRoutes);
 app.use("/api/vendor", themeMappingRoutes);
+app.use("/api/vendor", vendorCustomMenuTypesRoutes);
+
 
 // --- Public branch redirect route ---
 // IMPORTANT: This must be BEFORE the Flutter static serving
