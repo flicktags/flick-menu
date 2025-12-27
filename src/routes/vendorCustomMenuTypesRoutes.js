@@ -6,7 +6,7 @@ import {
   updateCustomMenuType,
   deleteCustomMenuType,
   reorderCustomMenuTypes,
-} from "../controller/branchCustomMenuTypesController.js";
+} from "../controllers/branchCustomMenuTypesController.js";
 
 // your firebase auth middleware (adjust path/name)
 import { requireFirebaseAuth } from "../middleware/requireFirebaseAuth.js";
