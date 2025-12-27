@@ -26,4 +26,5 @@ const ThemeMappingSchema = new Schema(
 // Enforce unique mapping per (vendor, branch, section)
 ThemeMappingSchema.index({ vendorId: 1, branchId: 1, sectionKey: 1 }, { unique: true });
 
+
 export default model("ThemeMapping", ThemeMappingSchema);

@@ -4,6 +4,9 @@ import ThemeMapping from "../models/ThemeMapping.js"
 import Branch from "../models/Branch.js";
 import Vendor from "../models/Vendor.js";
 
+import { touchBranchMenuStampByBizId } from "../utils/touchMenuStamp.js";
+
+
 /** utils */
 const asStr = (v, def = "") => (v == null ? def : String(v));
 const asUpper = (v, def = "") => asStr(v, def).trim().toUpperCase();
@@ -37,6 +40,8 @@ async function assertVendorUserOwnsBranch(req, vendorId, branchId) {
 
   // (Optional) Allow admins:
   if (req.user?.isAdmin === true) return true;
+
+
 
   return false;
 }
@@ -106,6 +111,14 @@ export const upsertThemeMappingVendor = async (req, res) => {
       { vendorId, branchId, sectionKey, itemTypeDesignMap: clean },
       { new: true, upsert: true, setDefaultsOnInsert: true }
     ).lean();
+
+     let newStamp = null;
+    try {
+      newStamp = await touchBranchMenuStampByBizId(branchId);
+    } catch (e) {
+      console.error("[ThemeMapping][PUT] stamp touch failed:", e);
+      // You can still return ok, but cache may not refresh if stamp fails
+    }
 
     return res.json({ ok: true, itemTypeDesignMap: upsert.itemTypeDesignMap || {} });
   } catch (e) {
