@@ -18,6 +18,7 @@ import vendorCustomMenuTypesRoutes from "./routes/vendorCustomMenuTypesRoutes.js
 // New redirect import
 import { publicBranchRedirect } from "./routes/publicRedirect.js";
 
+
 const app = express();
 
 // Middlewares

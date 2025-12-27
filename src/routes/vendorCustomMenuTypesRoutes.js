@@ -9,7 +9,7 @@ import {
 } from "../controllers/branchCustomMenuTypesController.js";
 
 // your firebase auth middleware (adjust path/name)
-import { requireFirebaseAuth } from "../middleware/requireFirebaseAuth.js";
+import { requireFirebaseAuth } from "../middlewares/authMiddleware.js";
 
 const router = express.Router();
 
