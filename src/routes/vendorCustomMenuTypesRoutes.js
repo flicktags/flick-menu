@@ -9,39 +9,39 @@ import {
 } from "../controllers/branchCustomMenuTypesController.js";
 
 // your firebase auth middleware (adjust path/name)
-import { requireFirebaseAuth } from "../middlewares/authMiddleware.js";
+import { verifyFirebaseToken } from "../middlewares/authMiddleware.js";
 
 const router = express.Router();
 
 // ✅ Base: /api/vendor/branches/:branchId/custom-menu-types
 router.get(
   "/branches/:branchId/custom-menu-types",
-  requireFirebaseAuth,
+  verifyFirebaseToken,
   getCustomMenuTypes
 );
 
 router.post(
   "/branches/:branchId/custom-menu-types",
-  requireFirebaseAuth,
+  verifyFirebaseToken,
   createCustomMenuType
 );
 
 router.put(
   "/branches/:branchId/custom-menu-types/:code",
-  requireFirebaseAuth,
+  verifyFirebaseToken,
   updateCustomMenuType
 );
 
 router.delete(
   "/branches/:branchId/custom-menu-types/:code",
-  requireFirebaseAuth,
+  verifyFirebaseToken,
   deleteCustomMenuType
 );
 
 // ✅ reorder
 router.put(
   "/branches/:branchId/custom-menu-types/reorder",
-  requireFirebaseAuth,
+  verifyFirebaseToken,
   reorderCustomMenuTypes
 );
 
