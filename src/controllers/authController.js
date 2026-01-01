@@ -115,23 +115,23 @@ export const registerVendor = async (req, res) => {
   }
 };
 
-/** ========== AUTH BOOTSTRAP (vendor or branch) ==========
+/**
  * GET /api/auth/bootstrap
  * Headers: Authorization: Bearer <idToken>
  * Query:
- *   - mode: vendor | branch   (default vendor)
- *   - vendorId: required if mode=branch (to scope selection)
- *   - branchId: optional (to pin a specific branch)
+ *   - mode: vendor | branch (default vendor)
+ *   - vendorId: OPTIONAL (for branch mode)
+ *   - branchId: OPTIONAL (for branch mode)
  */
 export const authBootstrap = async (req, res) => {
   try {
     const uid = req.user?.uid;
     const mode = String(req.query.mode || "vendor").toLowerCase();
 
-    if (!uid) return res.status(401).json({ error: "Unauthorized" });
+    if (!uid) return res.status(401).json({ message: "Unauthorized" });
 
+    // ---------------- Vendor mode ----------------
     if (mode !== "branch") {
-      // Vendor mode => same shape as /api/user/me
       const vendor = await Vendor.findOne({ userId: uid }).lean();
       return res.status(200).json({
         user: { uid: req.user.uid, email: req.user.email || null },
@@ -139,39 +139,121 @@ export const authBootstrap = async (req, res) => {
       });
     }
 
-    // ---- Branch mode ----
-    const vendorId = (req.query.vendorId || "").toString().trim();
-    const branchId = (req.query.branchId || "").toString().trim();
+    // ---------------- Branch mode ----------------
+    const vendorIdQ = (req.query.vendorId || "").toString().trim(); // optional
+    const branchIdQ = (req.query.branchId || "").toString().trim(); // optional
 
-    if (!vendorId) {
-      return res.status(400).json({ error: "vendorId is required for branch mode" });
+    // ✅ If vendorId is provided, keep your old behavior (backward compatible)
+    if (vendorIdQ) {
+      const filter = { userId: uid, vendorId: vendorIdQ };
+      if (branchIdQ) filter.branchId = branchIdQ;
+
+      const branches = await Branch.find(filter).sort({ createdAt: -1 }).lean();
+      if (!branches.length) {
+        return res.status(404).json({ message: "No branches found for this user/vendor selection" });
+      }
+
+      const branch = branchIdQ
+        ? branches.find((b) => b.branchId === branchIdQ) || branches[0]
+        : branches[0];
+
+      const vendor = await Vendor.findOne({ vendorId: vendorIdQ }).lean();
+
+      return res.status(200).json({
+        user: { uid: req.user.uid, email: req.user.email || null },
+        vendor: vendor || null,
+        branch,
+        branches,
+      });
     }
 
-    // Find branches owned by this user (branch manager), scoped to vendorId
-    const filter = { userId: uid, vendorId };
-    if (branchId) filter.branchId = branchId;
-
-    const branches = await Branch.find(filter).lean();
-    if (!branches || branches.length === 0) {
-      return res.status(404).json({ error: "No branches found for this user/vendor selection" });
+    // ✅ NEW: No vendorId required — infer from branches owned by this UID
+    const allBranches = await Branch.find({ userId: uid }).sort({ createdAt: -1 }).lean();
+    if (!allBranches.length) {
+      return res.status(404).json({ message: "No branches found for this user" });
     }
 
-    // Choose a primary branch (specific or first)
-    const branch = branchId
-      ? branches.find((b) => b.branchId === branchId) || branches[0]
-      : branches[0];
+    // If branchId provided (optional), pin it
+    let primary = allBranches[0];
+    if (branchIdQ) {
+      primary = allBranches.find((b) => b.branchId === branchIdQ) || allBranches[0];
+    }
 
-    const vendor = await Vendor.findOne({ vendorId }).lean();
+    // Infer vendorId from primary branch
+    const inferredVendorId = (primary.vendorId || "").toString().trim();
+    const vendor = inferredVendorId
+      ? await Vendor.findOne({ vendorId: inferredVendorId }).lean()
+      : null;
 
     return res.status(200).json({
       user: { uid: req.user.uid, email: req.user.email || null },
-      vendor: vendor || null,      // may be null if not found; UI should handle
-      branch,
-      branches,
+      vendor: vendor || null,
+      branch: primary,
+      branches: allBranches,
     });
   } catch (err) {
     console.error("authBootstrap error:", err);
-    return res.status(500).json({ error: err.message || "Server error" });
+    return res.status(500).json({ message: err.message || "Server error" });
   }
 };
+
+// /** ========== AUTH BOOTSTRAP (vendor or branch) ==========
+//  * GET /api/auth/bootstrap
+//  * Headers: Authorization: Bearer <idToken>
+//  * Query:
+//  *   - mode: vendor | branch   (default vendor)
+//  *   - vendorId: required if mode=branch (to scope selection)
+//  *   - branchId: optional (to pin a specific branch)
+//  */
+// export const authBootstrap = async (req, res) => {
+//   try {
+//     const uid = req.user?.uid;
+//     const mode = String(req.query.mode || "vendor").toLowerCase();
+
+//     if (!uid) return res.status(401).json({ error: "Unauthorized" });
+
+//     if (mode !== "branch") {
+//       // Vendor mode => same shape as /api/user/me
+//       const vendor = await Vendor.findOne({ userId: uid }).lean();
+//       return res.status(200).json({
+//         user: { uid: req.user.uid, email: req.user.email || null },
+//         vendor: vendor || null,
+//       });
+//     }
+
+//     // ---- Branch mode ----
+//     const vendorId = (req.query.vendorId || "").toString().trim();
+//     const branchId = (req.query.branchId || "").toString().trim();
+
+//     if (!vendorId) {
+//       return res.status(400).json({ error: "vendorId is required for branch mode" });
+//     }
+
+//     // Find branches owned by this user (branch manager), scoped to vendorId
+//     const filter = { userId: uid, vendorId };
+//     if (branchId) filter.branchId = branchId;
+
+//     const branches = await Branch.find(filter).lean();
+//     if (!branches || branches.length === 0) {
+//       return res.status(404).json({ error: "No branches found for this user/vendor selection" });
+//     }
+
+//     // Choose a primary branch (specific or first)
+//     const branch = branchId
+//       ? branches.find((b) => b.branchId === branchId) || branches[0]
+//       : branches[0];
+
+//     const vendor = await Vendor.findOne({ vendorId }).lean();
+
+//     return res.status(200).json({
+//       user: { uid: req.user.uid, email: req.user.email || null },
+//       vendor: vendor || null,      // may be null if not found; UI should handle
+//       branch,
+//       branches,
+//     });
+//   } catch (err) {
+//     console.error("authBootstrap error:", err);
+//     return res.status(500).json({ error: err.message || "Server error" });
+//   }
+// };
 
