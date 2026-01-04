@@ -2,6 +2,8 @@
 import MenuItem from "../models/MenuItem.js";
 import Branch from "../models/Branch.js";
 import Vendor from "../models/Vendor.js";
+import cloudinary, { CLOUDINARY_FOLDER } from "../utils/cloudinary.js";
+
 import { touchBranchMenuStampByBizId } from "../utils/touchMenuStamp.js";
 
 
@@ -97,6 +99,43 @@ async function refreshSectionActiveCount(branch, sectionKey) {
   }
 }
 
+function isOurCloudinaryUrl(url) {
+  if (!url || typeof url !== "string") return false;
+  return url.includes("res.cloudinary.com/");
+}
+
+function publicIdFromCloudinaryUrl(url) {
+  if (!url || typeof url !== "string") return null;
+
+  const marker = "/upload/";
+  const i = url.indexOf(marker);
+  if (i === -1) return null;
+
+  let rest = url.substring(i + marker.length);
+  rest = rest.split("?")[0];
+
+  const parts = rest.split("/").filter(Boolean);
+
+  // find v12345 segment (transformations may exist before it)
+  const vIndex = parts.findIndex((p) => /^v\d+$/.test(p));
+  const startIndex = vIndex !== -1 ? vIndex + 1 : 0;
+
+  const publicParts = parts.slice(startIndex);
+  if (!publicParts.length) return null;
+
+  let publicId = publicParts.join("/");
+  publicId = publicId.replace(/\.[a-zA-Z0-9]+$/, ""); // remove extension
+
+  return publicId || null;
+}
+
+function isInAllowedFolder(publicId) {
+  if (!CLOUDINARY_FOLDER || !CLOUDINARY_FOLDER.trim()) return true;
+  const f = CLOUDINARY_FOLDER.trim().replace(/\/+$/, ""); // remove trailing slash
+  return publicId === f || publicId.startsWith(`${f}/`);
+}
+
+
 // ---------------- CREATE (body-based) ----------------
 
 /** small coercion helpers */
@@ -160,6 +199,7 @@ export const createMenuItem = async (req, res) => {
       descriptionArabic: asStr(req.body.descriptionArabic, ""),
 
       imageUrl: asStr(req.body.imageUrl, ""),
+      imagePublicId: asStr(req.body.imagePublicId, "").trim(), // ✅ NEW (optional)
       videoUrl: asStr(req.body.videoUrl, ""),
 
       allergens: asArrayOfStrings(req.body.allergens),
@@ -344,6 +384,9 @@ export const updateMenuItem = async (req, res) => {
       descriptionArabic: req.body.descriptionArabic != null ? asStr(req.body.descriptionArabic, "") : item.descriptionArabic,
 
       imageUrl: req.body.imageUrl != null ? asStr(req.body.imageUrl, "") : item.imageUrl,
+      imagePublicId: Object.prototype.hasOwnProperty.call(req.body, "imagePublicId")
+        ? asStr(req.body.imagePublicId, "").trim()
+        : item.imagePublicId,
       videoUrl: req.body.videoUrl != null ? asStr(req.body.videoUrl, "") : item.videoUrl,
 
       allergens: Array.isArray(req.body.allergens) ? req.body.allergens.map(String) : item.allergens,
@@ -450,27 +493,86 @@ export const updateMenuItem = async (req, res) => {
 };
 
 // ---------------- DELETE ----------------
+
 export const deleteMenuItem = async (req, res) => {
   try {
     const id = req.params.id;
+
     const item = await MenuItem.findById(id);
     if (!item) return res.status(404).json({ code: "NOT_FOUND", message: "Item not found" });
 
     const branch = await Branch.findOne({ branchId: item.branchId }).lean(false);
     if (!branch) return res.status(404).json({ code: "BRANCH_NOT_FOUND", message: "Branch not found" });
+
     if (!(await userOwnsBranch(req, branch))) {
       return res.status(403).json({ code: "FORBIDDEN", message: "You do not own this branch" });
     }
 
+    // ✅ delete image on Cloudinary (best-effort, don't block DB delete)
+    const url = (item.imageUrl || "").trim();
+    let publicId = "";
+
+    if (url && isOurCloudinaryUrl(url)) {
+      publicId = publicIdFromCloudinaryUrl(url) || "";
+    }
+
+    if (publicId && isInAllowedFolder(publicId)) {
+      try {
+        await cloudinary.uploader.destroy(publicId, {
+          resource_type: "image",
+          invalidate: true,
+        });
+      } catch (e) {
+        console.warn("[deleteMenuItem] Cloudinary destroy failed:", e?.message || e);
+      }
+    } else if (publicId) {
+      console.warn("[deleteMenuItem] Skipped Cloudinary delete (outside allowed folder):", publicId);
+    }
+
     const sectionKey = item.sectionKey;
+
     await item.deleteOne();
 
     await refreshSectionActiveCount(branch, sectionKey);
     await touchBranchMenuStampByBizId(branch.branchId);
 
-    return res.json({ message: "Menu item deleted", id });
+    return res.json({
+      message: "Menu item deleted",
+      id,
+      cloudinary: publicId
+        ? { attempted: true, publicId }
+        : { attempted: false, reason: "no_image_or_not_cloudinary" },
+    });
   } catch (err) {
     console.error("deleteMenuItem error:", err);
     return res.status(500).json({ code: "SERVER_ERROR", message: err.message });
   }
 };
+
+
+
+
+// export const deleteMenuItem = async (req, res) => {
+//   try {
+//     const id = req.params.id;
+//     const item = await MenuItem.findById(id);
+//     if (!item) return res.status(404).json({ code: "NOT_FOUND", message: "Item not found" });
+
+//     const branch = await Branch.findOne({ branchId: item.branchId }).lean(false);
+//     if (!branch) return res.status(404).json({ code: "BRANCH_NOT_FOUND", message: "Branch not found" });
+//     if (!(await userOwnsBranch(req, branch))) {
+//       return res.status(403).json({ code: "FORBIDDEN", message: "You do not own this branch" });
+//     }
+
+//     const sectionKey = item.sectionKey;
+//     await item.deleteOne();
+
+//     await refreshSectionActiveCount(branch, sectionKey);
+//     await touchBranchMenuStampByBizId(branch.branchId);
+
+//     return res.json({ message: "Menu item deleted", id });
+//   } catch (err) {
+//     console.error("deleteMenuItem error:", err);
+//     return res.status(500).json({ code: "SERVER_ERROR", message: err.message });
+//   }
+// };

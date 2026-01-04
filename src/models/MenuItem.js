@@ -126,6 +126,8 @@ const menuItemSchema = new Schema(
     descriptionArabic: { type: String, default: "" },
 
     imageUrl: { type: String, default: "" },
+    imagePublicId: { type: String, default: "", trim: true },
+
     videoUrl: { type: String, default: "" },
 
     allergens: { type: [String], default: [] },
