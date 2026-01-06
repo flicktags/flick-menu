@@ -334,21 +334,188 @@ export const getMenuItem = async (req, res) => {
   }
 };
 
+// // ---------------- UPDATE ----------------
+// export const updateMenuItem = async (req, res) => {
+//   try {
+//     const id = (req.params.id || "").trim();
+//     if (!id) {
+//       return res.status(400).json({ code: "ID_REQUIRED", message: "Item id is required" });
+//     }
+
+//     const item = await MenuItem.findById(id);
+//     if (!item) return res.status(404).json({ code: "NOT_FOUND", message: "Item not found" });
+
+//     const branch = await Branch.findOne({ branchId: item.branchId }).lean(false);
+//     if (!branch) return res.status(404).json({ code: "BRANCH_NOT_FOUND", message: "Branch not found" });
+//     if (!(await userOwnsBranch(req, branch))) {
+//       return res.status(403).json({ code: "FORBIDDEN", message: "You do not own this branch" });
+//     }
+
+//     // ---- helpers (same semantics as create) ----
+//     const asStr = (v, def = "") => (v == null ? def : String(v));
+//     const asUpper = (v, def = "") => asStr(v, def).trim().toUpperCase();
+//     const asBool = (v, def = false) =>
+//       typeof v === "boolean" ? v : v == null ? def : !!v;
+//     const asNum = (v, def = 0) => {
+//       if (v === "" || v === null || v === undefined) return def;
+//       const n = Number(v);
+//       return Number.isFinite(n) ? n : def;
+//     };
+
+//     // Section move validation (if any)
+//     const newSectionKey = req.body.sectionKey ? asUpper(req.body.sectionKey) : item.sectionKey;
+//     if (newSectionKey !== item.sectionKey) {
+//       const sec = (branch.menuSections || []).find((s) => s.key === newSectionKey);
+//       if (!sec || sec.isEnabled !== true) {
+//         return res.status(400).json({
+//           code: "SECTION_NOT_ENABLED",
+//           message: `Menu section '${newSectionKey}' is not enabled on branch ${branch.branchId}`,
+//         });
+//       }
+//     }
+
+//     // Build "next" state using PATCH semantics.
+//     // If a field is omitted in body, keep existing.
+//     const next = {
+//       itemType: req.body.itemType != null ? asStr(req.body.itemType).trim() : item.itemType,
+//       nameEnglish: req.body.nameEnglish != null ? asStr(req.body.nameEnglish).trim() : item.nameEnglish,
+//       nameArabic:  req.body.nameArabic  != null ? asStr(req.body.nameArabic).trim()  : item.nameArabic,
+//       description: req.body.description != null ? asStr(req.body.description, "") : item.description,
+//       descriptionArabic: req.body.descriptionArabic != null ? asStr(req.body.descriptionArabic, "") : item.descriptionArabic,
+
+//       imageUrl: req.body.imageUrl != null ? asStr(req.body.imageUrl, "") : item.imageUrl,
+//       imagePublicId: Object.prototype.hasOwnProperty.call(req.body, "imagePublicId")
+//         ? asStr(req.body.imagePublicId, "").trim()
+//         : item.imagePublicId,
+//       videoUrl: req.body.videoUrl != null ? asStr(req.body.videoUrl, "") : item.videoUrl,
+
+//       allergens: Array.isArray(req.body.allergens) ? req.body.allergens.map(String) : item.allergens,
+//       tags:      Array.isArray(req.body.tags)      ? req.body.tags.map(String)      : item.tags,
+
+//       isFeatured:  req.body.isFeatured  != null ? asBool(req.body.isFeatured, item.isFeatured)     : item.isFeatured,
+//       isActive:    req.body.isActive    != null ? asBool(req.body.isActive, item.isActive)         : item.isActive,
+//       isAvailable: req.body.isAvailable != null ? asBool(req.body.isAvailable, item.isAvailable)   : item.isAvailable,
+//       isSpicy:     req.body.isSpicy     != null ? asBool(req.body.isSpicy, item.isSpicy)           : item.isSpicy,
+
+//       calories: req.body.calories != null ? asNum(req.body.calories, item.calories) : item.calories,
+//       sku:      req.body.sku      != null ? asStr(req.body.sku, "").trim()          : item.sku,
+//       preparationTimeInMinutes:
+//                 req.body.preparationTimeInMinutes != null
+//                   ? asNum(req.body.preparationTimeInMinutes, item.preparationTimeInMinutes)
+//                   : item.preparationTimeInMinutes,
+
+//       ingredients: Array.isArray(req.body.ingredients) ? req.body.ingredients.map(String) : item.ingredients,
+//       addons:      Array.isArray(req.body.addons)      ? req.body.addons                   : item.addons,
+
+//       // discount PATCH rules:
+//       // - omit => keep existing
+//       // - null  => remove (set undefined)
+//       // - object => replace
+//       discount:
+//         Object.prototype.hasOwnProperty.call(req.body, "discount")
+//           ? (req.body.discount === null
+//               ? undefined
+//               : (typeof req.body.discount === "object" ? req.body.discount : item.discount))
+//           : item.discount,
+
+//       isSizedBased: req.body.isSizedBased != null ? asBool(req.body.isSizedBased, item.isSizedBased) : item.isSizedBased,
+//       sizes:        Array.isArray(req.body.sizes) ? req.body.sizes : item.sizes,
+
+//       fixedPrice:   req.body.fixedPrice   != null ? asNum(req.body.fixedPrice, item.fixedPrice)       : item.fixedPrice,
+
+//       // offeredPrice PATCH rules (align with schema: undefined when "removed"):
+//       // - omit => keep existing
+//       // - "" or null => undefined (remove)
+//       // - number/string => set Number
+//       offeredPrice: Object.prototype.hasOwnProperty.call(req.body, "offeredPrice")
+//         ? ((req.body.offeredPrice === "" || req.body.offeredPrice === null)
+//             ? undefined
+//             : Number(req.body.offeredPrice))
+//         : item.offeredPrice,
+
+//       sortOrder: req.body.sortOrder != null ? asNum(req.body.sortOrder, item.sortOrder) : item.sortOrder,
+
+//       sectionKey: newSectionKey,
+//     };
+
+//     // ---------- NEW: Group-level category fields ----------
+//     // Only update when explicitly present in body (so PATCH doesn't unintentionally blank them)
+//     if (Object.prototype.hasOwnProperty.call(req.body, "foodCategoryGroupId")) {
+//       next.foodCategoryGroupId =
+//         req.body.foodCategoryGroupId ? String(req.body.foodCategoryGroupId) : null;
+//     } else {
+//       next.foodCategoryGroupId = item.foodCategoryGroupId;
+//     }
+
+//     if (Object.prototype.hasOwnProperty.call(req.body, "foodCategoryGroupCode")) {
+//       next.foodCategoryGroupCode = asUpper(req.body.foodCategoryGroupCode, "");
+//     } else {
+//       next.foodCategoryGroupCode = item.foodCategoryGroupCode;
+//     }
+
+//     if (Object.prototype.hasOwnProperty.call(req.body, "foodCategoryGroupNameEnglish")) {
+//       next.foodCategoryGroupNameEnglish = asStr(req.body.foodCategoryGroupNameEnglish, "").trim();
+//     } else {
+//       next.foodCategoryGroupNameEnglish = item.foodCategoryGroupNameEnglish;
+//     }
+//     // ------------------------------------------------------
+
+//     // Validate business rules (same checker you already use)
+//     const errors = validateBusinessRules(next);
+//     if (errors.length) {
+//       return res.status(400).json({ code: "VALIDATION_FAILED", message: "Invalid payload", errors });
+//     }
+
+//     const prevSection = item.sectionKey;
+//     const prevActive  = item.isActive;
+
+//     Object.assign(item, next);
+//     await item.save();
+
+//     await refreshSectionActiveCount(branch, prevSection);
+//     if (newSectionKey !== prevSection || prevActive !== item.isActive) {
+//       await refreshSectionActiveCount(branch, newSectionKey);
+//     }
+//     await touchBranchMenuStampByBizId(branch.branchId);
+
+//     return res.json({ message: "Menu item updated", item });
+//   } catch (err) {
+//     console.error("updateMenuItem error:", err);
+//     return res.status(500).json({
+//       code: "SERVER_ERROR",
+//       message: err?.message || "Unexpected error",
+//       details: err?.errors ? Object.keys(err.errors).reduce((o, k) => {
+//         o[k] = err.errors[k]?.message;
+//         return o;
+//       }, {}) : undefined,
+//     });
+//   }
+// };
+
 // ---------------- UPDATE ----------------
 export const updateMenuItem = async (req, res) => {
   try {
     const id = (req.params.id || "").trim();
     if (!id) {
-      return res.status(400).json({ code: "ID_REQUIRED", message: "Item id is required" });
+      return res
+        .status(400)
+        .json({ code: "ID_REQUIRED", message: "Item id is required" });
     }
 
     const item = await MenuItem.findById(id);
-    if (!item) return res.status(404).json({ code: "NOT_FOUND", message: "Item not found" });
+    if (!item)
+      return res.status(404).json({ code: "NOT_FOUND", message: "Item not found" });
 
     const branch = await Branch.findOne({ branchId: item.branchId }).lean(false);
-    if (!branch) return res.status(404).json({ code: "BRANCH_NOT_FOUND", message: "Branch not found" });
+    if (!branch)
+      return res
+        .status(404)
+        .json({ code: "BRANCH_NOT_FOUND", message: "Branch not found" });
+
     if (!(await userOwnsBranch(req, branch))) {
-      return res.status(403).json({ code: "FORBIDDEN", message: "You do not own this branch" });
+      return res
+        .status(403)
+        .json({ code: "FORBIDDEN", message: "You do not own this branch" });
     }
 
     // ---- helpers (same semantics as create) ----
@@ -362,8 +529,35 @@ export const updateMenuItem = async (req, res) => {
       return Number.isFinite(n) ? n : def;
     };
 
+    // =========================
+    // Image change detection
+    // =========================
+    const hasImagePublicIdInBody = Object.prototype.hasOwnProperty.call(
+      req.body,
+      "imagePublicId"
+    );
+
+    const oldPublicId = asStr(item.imagePublicId, "").trim();
+    const incomingPublicId = hasImagePublicIdInBody
+      ? asStr(req.body.imagePublicId, "").trim()
+      : null;
+
+    // Actions:
+    // - replace: user sent a NEW imagePublicId different than existing
+    // - remove:  user explicitly sent imagePublicId="" (remove image)
+    // - none:    do not touch Cloudinary
+    const imageAction =
+      hasImagePublicIdInBody && incomingPublicId === ""
+        ? "remove"
+        : hasImagePublicIdInBody && incomingPublicId && incomingPublicId !== oldPublicId
+        ? "replace"
+        : "none";
+
     // Section move validation (if any)
-    const newSectionKey = req.body.sectionKey ? asUpper(req.body.sectionKey) : item.sectionKey;
+    const newSectionKey = req.body.sectionKey
+      ? asUpper(req.body.sectionKey)
+      : item.sectionKey;
+
     if (newSectionKey !== item.sectionKey) {
       const sec = (branch.menuSections || []).find((s) => s.key === newSectionKey);
       if (!sec || sec.isEnabled !== true) {
@@ -377,72 +571,118 @@ export const updateMenuItem = async (req, res) => {
     // Build "next" state using PATCH semantics.
     // If a field is omitted in body, keep existing.
     const next = {
-      itemType: req.body.itemType != null ? asStr(req.body.itemType).trim() : item.itemType,
-      nameEnglish: req.body.nameEnglish != null ? asStr(req.body.nameEnglish).trim() : item.nameEnglish,
-      nameArabic:  req.body.nameArabic  != null ? asStr(req.body.nameArabic).trim()  : item.nameArabic,
-      description: req.body.description != null ? asStr(req.body.description, "") : item.description,
-      descriptionArabic: req.body.descriptionArabic != null ? asStr(req.body.descriptionArabic, "") : item.descriptionArabic,
+      itemType:
+        req.body.itemType != null ? asStr(req.body.itemType).trim() : item.itemType,
+      nameEnglish:
+        req.body.nameEnglish != null
+          ? asStr(req.body.nameEnglish).trim()
+          : item.nameEnglish,
+      nameArabic:
+        req.body.nameArabic != null
+          ? asStr(req.body.nameArabic).trim()
+          : item.nameArabic,
+      description:
+        req.body.description != null ? asStr(req.body.description, "") : item.description,
+      descriptionArabic:
+        req.body.descriptionArabic != null
+          ? asStr(req.body.descriptionArabic, "")
+          : item.descriptionArabic,
 
-      imageUrl: req.body.imageUrl != null ? asStr(req.body.imageUrl, "") : item.imageUrl,
-      imagePublicId: Object.prototype.hasOwnProperty.call(req.body, "imagePublicId")
+      // ✅ IMPORTANT: do NOT overwrite image fields unless client explicitly sent them
+      // imageUrl is updated only when provided (same as your existing behavior)
+      imageUrl:
+        req.body.imageUrl != null ? asStr(req.body.imageUrl, "") : item.imageUrl,
+
+      // imagePublicId is updated ONLY when the key exists in the body (same as your existing logic)
+      imagePublicId: hasImagePublicIdInBody
         ? asStr(req.body.imagePublicId, "").trim()
         : item.imagePublicId,
+
       videoUrl: req.body.videoUrl != null ? asStr(req.body.videoUrl, "") : item.videoUrl,
 
-      allergens: Array.isArray(req.body.allergens) ? req.body.allergens.map(String) : item.allergens,
-      tags:      Array.isArray(req.body.tags)      ? req.body.tags.map(String)      : item.tags,
+      allergens: Array.isArray(req.body.allergens)
+        ? req.body.allergens.map(String)
+        : item.allergens,
+      tags: Array.isArray(req.body.tags) ? req.body.tags.map(String) : item.tags,
 
-      isFeatured:  req.body.isFeatured  != null ? asBool(req.body.isFeatured, item.isFeatured)     : item.isFeatured,
-      isActive:    req.body.isActive    != null ? asBool(req.body.isActive, item.isActive)         : item.isActive,
-      isAvailable: req.body.isAvailable != null ? asBool(req.body.isAvailable, item.isAvailable)   : item.isAvailable,
-      isSpicy:     req.body.isSpicy     != null ? asBool(req.body.isSpicy, item.isSpicy)           : item.isSpicy,
+      isFeatured:
+        req.body.isFeatured != null
+          ? asBool(req.body.isFeatured, item.isFeatured)
+          : item.isFeatured,
+      isActive:
+        req.body.isActive != null
+          ? asBool(req.body.isActive, item.isActive)
+          : item.isActive,
+      isAvailable:
+        req.body.isAvailable != null
+          ? asBool(req.body.isAvailable, item.isAvailable)
+          : item.isAvailable,
+      isSpicy:
+        req.body.isSpicy != null ? asBool(req.body.isSpicy, item.isSpicy) : item.isSpicy,
 
-      calories: req.body.calories != null ? asNum(req.body.calories, item.calories) : item.calories,
-      sku:      req.body.sku      != null ? asStr(req.body.sku, "").trim()          : item.sku,
+      calories:
+        req.body.calories != null ? asNum(req.body.calories, item.calories) : item.calories,
+      sku: req.body.sku != null ? asStr(req.body.sku, "").trim() : item.sku,
       preparationTimeInMinutes:
-                req.body.preparationTimeInMinutes != null
-                  ? asNum(req.body.preparationTimeInMinutes, item.preparationTimeInMinutes)
-                  : item.preparationTimeInMinutes,
+        req.body.preparationTimeInMinutes != null
+          ? asNum(req.body.preparationTimeInMinutes, item.preparationTimeInMinutes)
+          : item.preparationTimeInMinutes,
 
-      ingredients: Array.isArray(req.body.ingredients) ? req.body.ingredients.map(String) : item.ingredients,
-      addons:      Array.isArray(req.body.addons)      ? req.body.addons                   : item.addons,
+      ingredients: Array.isArray(req.body.ingredients)
+        ? req.body.ingredients.map(String)
+        : item.ingredients,
+      addons: Array.isArray(req.body.addons) ? req.body.addons : item.addons,
 
       // discount PATCH rules:
       // - omit => keep existing
       // - null  => remove (set undefined)
       // - object => replace
-      discount:
-        Object.prototype.hasOwnProperty.call(req.body, "discount")
-          ? (req.body.discount === null
-              ? undefined
-              : (typeof req.body.discount === "object" ? req.body.discount : item.discount))
-          : item.discount,
+      discount: Object.prototype.hasOwnProperty.call(req.body, "discount")
+        ? req.body.discount === null
+          ? undefined
+          : typeof req.body.discount === "object"
+          ? req.body.discount
+          : item.discount
+        : item.discount,
 
-      isSizedBased: req.body.isSizedBased != null ? asBool(req.body.isSizedBased, item.isSizedBased) : item.isSizedBased,
-      sizes:        Array.isArray(req.body.sizes) ? req.body.sizes : item.sizes,
+      isSizedBased:
+        req.body.isSizedBased != null
+          ? asBool(req.body.isSizedBased, item.isSizedBased)
+          : item.isSizedBased,
+      sizes: Array.isArray(req.body.sizes) ? req.body.sizes : item.sizes,
 
-      fixedPrice:   req.body.fixedPrice   != null ? asNum(req.body.fixedPrice, item.fixedPrice)       : item.fixedPrice,
+      fixedPrice:
+        req.body.fixedPrice != null ? asNum(req.body.fixedPrice, item.fixedPrice) : item.fixedPrice,
 
       // offeredPrice PATCH rules (align with schema: undefined when "removed"):
       // - omit => keep existing
       // - "" or null => undefined (remove)
       // - number/string => set Number
       offeredPrice: Object.prototype.hasOwnProperty.call(req.body, "offeredPrice")
-        ? ((req.body.offeredPrice === "" || req.body.offeredPrice === null)
-            ? undefined
-            : Number(req.body.offeredPrice))
+        ? req.body.offeredPrice === "" || req.body.offeredPrice === null
+          ? undefined
+          : Number(req.body.offeredPrice)
         : item.offeredPrice,
 
-      sortOrder: req.body.sortOrder != null ? asNum(req.body.sortOrder, item.sortOrder) : item.sortOrder,
+      sortOrder:
+        req.body.sortOrder != null ? asNum(req.body.sortOrder, item.sortOrder) : item.sortOrder,
 
       sectionKey: newSectionKey,
     };
 
+    // ✅ If user explicitly wants to remove image, ensure BOTH fields cleared
+    // (so you don't keep old URL with empty publicId, or vice versa)
+    if (imageAction === "remove") {
+      next.imagePublicId = "";
+      next.imageUrl = "";
+    }
+
     // ---------- NEW: Group-level category fields ----------
     // Only update when explicitly present in body (so PATCH doesn't unintentionally blank them)
     if (Object.prototype.hasOwnProperty.call(req.body, "foodCategoryGroupId")) {
-      next.foodCategoryGroupId =
-        req.body.foodCategoryGroupId ? String(req.body.foodCategoryGroupId) : null;
+      next.foodCategoryGroupId = req.body.foodCategoryGroupId
+        ? String(req.body.foodCategoryGroupId)
+        : null;
     } else {
       next.foodCategoryGroupId = item.foodCategoryGroupId;
     }
@@ -453,8 +693,13 @@ export const updateMenuItem = async (req, res) => {
       next.foodCategoryGroupCode = item.foodCategoryGroupCode;
     }
 
-    if (Object.prototype.hasOwnProperty.call(req.body, "foodCategoryGroupNameEnglish")) {
-      next.foodCategoryGroupNameEnglish = asStr(req.body.foodCategoryGroupNameEnglish, "").trim();
+    if (
+      Object.prototype.hasOwnProperty.call(req.body, "foodCategoryGroupNameEnglish")
+    ) {
+      next.foodCategoryGroupNameEnglish = asStr(
+        req.body.foodCategoryGroupNameEnglish,
+        ""
+      ).trim();
     } else {
       next.foodCategoryGroupNameEnglish = item.foodCategoryGroupNameEnglish;
     }
@@ -463,14 +708,40 @@ export const updateMenuItem = async (req, res) => {
     // Validate business rules (same checker you already use)
     const errors = validateBusinessRules(next);
     if (errors.length) {
-      return res.status(400).json({ code: "VALIDATION_FAILED", message: "Invalid payload", errors });
+      return res
+        .status(400)
+        .json({ code: "VALIDATION_FAILED", message: "Invalid payload", errors });
     }
 
     const prevSection = item.sectionKey;
-    const prevActive  = item.isActive;
+    const prevActive = item.isActive;
 
+    // Save DB first (important: don't delete old Cloudinary image before DB save succeeds)
     Object.assign(item, next);
     await item.save();
+
+    // ✅ Delete old image from Cloudinary ONLY when user changed image
+    // - replace: delete oldPublicId (if exists and differs)
+    // - remove:  delete oldPublicId (if exists)
+    // NOTE: This uses `cloudinary` variable which you already use in delete endpoint.
+    // If your import is `import { v2 as cloudinary } from "cloudinary";` then this is correct:
+    // await cloudinary.uploader.destroy(...)
+    // If your code uses cloudinary.v2.uploader.destroy, adjust accordingly.
+    if (oldPublicId) {
+      const shouldDeleteOld =
+        (imageAction === "replace" && incomingPublicId && incomingPublicId !== oldPublicId) ||
+        (imageAction === "remove");
+
+      if (shouldDeleteOld) {
+        try {
+          await cloudinary.uploader.destroy(oldPublicId, { resource_type: "image" });
+          // console.log("[Cloudinary] destroyed old image:", oldPublicId);
+        } catch (e) {
+          // do NOT fail update if Cloudinary delete fails
+          console.warn("[Cloudinary] destroy failed:", oldPublicId, e?.message || e);
+        }
+      }
+    }
 
     await refreshSectionActiveCount(branch, prevSection);
     if (newSectionKey !== prevSection || prevActive !== item.isActive) {
@@ -484,13 +755,16 @@ export const updateMenuItem = async (req, res) => {
     return res.status(500).json({
       code: "SERVER_ERROR",
       message: err?.message || "Unexpected error",
-      details: err?.errors ? Object.keys(err.errors).reduce((o, k) => {
-        o[k] = err.errors[k]?.message;
-        return o;
-      }, {}) : undefined,
+      details: err?.errors
+        ? Object.keys(err.errors).reduce((o, k) => {
+            o[k] = err.errors[k]?.message;
+            return o;
+          }, {})
+        : undefined,
     });
   }
 };
+
 
 // ---------------- DELETE ----------------
 
