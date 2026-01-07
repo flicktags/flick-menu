@@ -2,7 +2,7 @@ import admin from "firebase-admin"; ///
 
 let serviceAccount;
 
-if (process.env.FIREBASE_CONFIG) {
+if (process.env.FIREBASE_CONFIG1) {
   // Running on Vercel (env var)
   serviceAccount = JSON.parse(process.env.FIREBASE_CONFIG);
 } else {
