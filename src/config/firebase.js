@@ -4,7 +4,7 @@ let serviceAccount;
 
 if (process.env.FIREBASE_CONFIG1) {
   // Running on Vercel (env var)
-  serviceAccount = JSON.parse(process.env.FIREBASE_CONFIG);
+  serviceAccount = JSON.parse(process.env.FIREBASE_CONFIG1);
 } else {
   // Running locally (fallback to local file or local env var)
   serviceAccount = JSON.parse(
