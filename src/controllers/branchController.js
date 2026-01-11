@@ -33,6 +33,8 @@ export const registerBranch = async (req, res) => {
       branding,
       taxes,
       qrSettings,
+
+      // optional from FE (plan only). expiryDate is controlled by backend
       subscription,
     } = req.body;
 
@@ -45,21 +47,32 @@ export const registerBranch = async (req, res) => {
     const userId = decodedToken.uid;
 
     // check vendor exists
-    const vendor = await Vendor.findOne({ vendorId });
+    const vendor = await Vendor.findOne({ vendorId }).lean();
     if (!vendor) {
       return res.status(404).json({ message: "Vendor not found" });
     }
 
-
-
-    // generate branchId
+    // generate branchId + slug
     const branchId = await generateBranchId();
-    const publicSlug = await generateUniquePublicSlug(); // ✅ NEW
+    const publicSlug = await generateUniquePublicSlug();
+
+    // ✅ backend-controlled "createdAt"
+    const createdAt = new Date();
+
+    // ✅ 30 days trial
+    const trialDays = 30;
+    const expiryDate = new Date(createdAt.getTime() + trialDays * 24 * 60 * 60 * 1000);
+
+    // plan: allow FE to send plan, otherwise default "trial"
+    const plan =
+      subscription && typeof subscription === "object" && subscription.plan
+        ? String(subscription.plan).trim()
+        : "trial";
 
     // create branch
     const branch = await Branch.create({
       branchId,
-      publicSlug, // ✅ NEW
+      publicSlug,
       vendorId,
       userId,
       nameEnglish,
@@ -74,15 +87,91 @@ export const registerBranch = async (req, res) => {
       branding,
       taxes,
       qrSettings,
-      subscription,
+
+      // ✅ only plan + expiryDate
+      subscription: { plan, expiryDate },
+
+      // ✅ force timestamps at creation to match your required format
+      // (Mongoose would do this anyway, but this guarantees exact createdAt/updatedAt)
+      createdAt,
+      updatedAt: createdAt,
     });
 
-    res.status(201).json({ message: "Branch registered successfully", branch });
+    return res.status(201).json({ message: "Branch registered successfully", branch });
   } catch (error) {
     console.error("Branch Register Error:", error);
-    res.status(500).json({ message: error.message });
+    return res.status(500).json({ message: error.message });
   }
 };
+
+
+// export const registerBranch = async (req, res) => {
+//   try {
+//     const {
+//       token,
+//       vendorId,
+//       nameEnglish,
+//       nameArabic,
+//       venueType,
+//       serviceFeatures,
+//       openingHours,
+//       contact,
+//       address,
+//       timeZone,
+//       currency,
+//       branding,
+//       taxes,
+//       qrSettings,
+//       subscription,
+//     } = req.body;
+
+//     if (!token) {
+//       return res.status(400).json({ message: "Firebase token required" });
+//     }
+
+//     // verify Firebase token
+//     const decodedToken = await admin.auth().verifyIdToken(token);
+//     const userId = decodedToken.uid;
+
+//     // check vendor exists
+//     const vendor = await Vendor.findOne({ vendorId });
+//     if (!vendor) {
+//       return res.status(404).json({ message: "Vendor not found" });
+//     }
+
+
+
+//     // generate branchId
+//     const branchId = await generateBranchId();
+//     const publicSlug = await generateUniquePublicSlug(); // ✅ NEW
+
+//     // create branch
+//     const branch = await Branch.create({
+//       branchId,
+//       publicSlug, // ✅ NEW
+//       vendorId,
+//       userId,
+//       nameEnglish,
+//       nameArabic,
+//       venueType,
+//       serviceFeatures,
+//       openingHours,
+//       contact,
+//       address,
+//       timeZone,
+//       currency,
+//       branding,
+//       taxes,
+//       qrSettings,
+//       subscription,
+//     });
+
+//     res.status(201).json({ message: "Branch registered successfully", branch });
+//   } catch (error) {
+//     console.error("Branch Register Error:", error);
+//     res.status(500).json({ message: error.message });
+//   }
+// };
 
 
 // controllers/branchController.js
