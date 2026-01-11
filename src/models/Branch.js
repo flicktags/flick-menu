@@ -49,10 +49,22 @@ const branchSchema = new mongoose.Schema(
       coverBannerLogo: String, 
       splashScreenEnabled: { type: Boolean, default: false },
  },
-    taxes: { vatPercentage: Number, serviceChargePercentage: Number },
+    // taxes: { 
+    //   vatPercentage: Number, 
+    //   serviceChargePercentage: Number,  
+    //   vatNumber: { type: String, default: "" }, // ✅ NEW
+    // },
+    taxes: {
+      vatPercentage: { type: Number, default: 0 },
+      serviceChargePercentage: { type: Number, default: 0 },
+      vatNumber: { type: String, default: "" }, // ✅ NEW
+    },
     qrSettings: { qrsAllowed: { type: Boolean, default: true }, noOfQrs: { type: Number, default: 0 } },
-    subscription: { plan: String, expiryDate: Date },
-
+    // subscription: { plan: String, expiryDate: Date },
+    subscription: {
+      plan: { type: String, default: "trial" },
+      expiryDate: { type: Date }, // will be set by backend on create
+    },
     // (existing) future: link to MenuItems if you want
     menu: [{ type: mongoose.Schema.Types.ObjectId, ref: "Menu" }],
 

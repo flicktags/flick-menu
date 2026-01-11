@@ -69,6 +69,16 @@ export const registerBranch = async (req, res) => {
         ? String(subscription.plan).trim()
         : "trial";
 
+        // normalize taxes payload
+const vatPct = taxes?.vatPercentage ?? vendor?.taxes?.vatPercentage ?? 0;
+const svcPct = taxes?.serviceChargePercentage ?? 0;
+
+// ✅ take vatNumber from request first, otherwise fallback to vendor.billing.vatNumber
+const vatNumber =
+  (taxes?.vatNumber && String(taxes.vatNumber).trim()) ||
+  (vendor?.billing?.vatNumber && String(vendor.billing.vatNumber).trim()) ||
+  "";
+
     // create branch
     const branch = await Branch.create({
       branchId,
@@ -85,7 +95,11 @@ export const registerBranch = async (req, res) => {
       timeZone,
       currency,
       branding,
-      taxes,
+      taxes: {
+    vatPercentage: Number(vatPct) || 0,
+    serviceChargePercentage: Number(svcPct) || 0,
+    vatNumber, // ✅ NEW
+  },
       qrSettings,
 
       // ✅ only plan + expiryDate
