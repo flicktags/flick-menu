@@ -48,6 +48,13 @@ function buildCustomerQrUrl({ baseUrl, publicSlug, typeRaw, qrId, qrNumber }) {
   );
 }
 
+function titleCaseType(typeRaw) {
+  const t = String(typeRaw || "").toLowerCase();
+  if (t === "table") return "Table";
+  if (t === "room") return "Room";
+  return t.charAt(0).toUpperCase() + t.slice(1);
+}
+
 // controllers/qrCodeController.js
 const generateQr = async (req, res) => {
   try {
@@ -64,7 +71,7 @@ const generateQr = async (req, res) => {
     const branchBusinessId = String(req.body?.branchId || "").trim(); // e.g., "BR-000004"
     const typeRaw = String(req.body?.type || "").trim().toLowerCase();
     const numberOfQrsRaw = req.body?.numberOfQrs;
-    const labelRaw = req.body?.label;
+    // const labelRaw = req.body?.label;
 
     if (
       !branchBusinessId ||
@@ -88,10 +95,12 @@ const generateQr = async (req, res) => {
         .json({ message: "numberOfQrs must be a positive integer" });
     }
 
-    const label =
-      typeof labelRaw === "string" && labelRaw.trim().length > 0
-        ? labelRaw.trim()
-        : undefined;
+    // const label =
+    //   typeof labelRaw === "string" && labelRaw.trim().length > 0
+    //     ? labelRaw.trim()
+    //     : undefined;
+    const typeTitle = titleCaseType(typeRaw);
+
 
     // 3) Branch (by business id) + vendor from branch
     const branch = await Branch.findOne({ branchId: branchBusinessId }).lean();
@@ -162,49 +171,95 @@ const generateQr = async (req, res) => {
 
     // 7) Create docs
     const created = [];
-    for (let i = 0; i < count; i++) {
-      const suffix = startIndex + i;
-      const qrId = await generateQrId();
-      const qrNumber = `${typeRaw}-${suffix}`;
+for (let i = 0; i < count; i++) {
+  const suffix = startIndex + i;
+  const qrId = await generateQrId();
+  const qrNumber = `${typeRaw}-${suffix}`;
 
-      // ✅ NEW customer URL encoding (slug in PATH)
-      const customerUrl = buildCustomerQrUrl({
-        baseUrl: PUBLIC_MENU_BASE_URL,
-        publicSlug,
-        typeRaw,
-        qrId,
-        qrNumber,
-      });
+  // ✅ AUTO LABEL from sequence
+  const label = `${typeTitle} ${suffix}`;
 
-      const qrImage = await QRCode.toDataURL(customerUrl);
+  const customerUrl = buildCustomerQrUrl({
+    baseUrl: PUBLIC_MENU_BASE_URL,
+    publicSlug,
+    typeRaw,
+    qrId,
+    qrNumber,
+  });
 
-      const doc = await QrCode.create({
-        qrId,
-        branchId: String(branch._id),
-        vendorId: branch.vendorId,
-        type: typeRaw, // store lowercase
-        label,
-        number: qrNumber,
-        qrUrl: qrImage,
-        active: true,
-      });
+  const qrImage = await QRCode.toDataURL(customerUrl);
 
-      created.push({
-        qrId: doc.qrId,
-        branchId: doc.branchId,
-        vendorId: doc.vendorId,
-        type: doc.type,
-        label: doc.label,
-        number: doc.number,
-        qrUrl: doc.qrUrl,
-        active: doc.active,
-        _id: doc._id,
-        createdAt: doc.createdAt,
-        updatedAt: doc.updatedAt,
-        __v: doc.__v,
-        encodedUrl: customerUrl, // ✅ helpful for debugging
-      });
-    }
+  const doc = await QrCode.create({
+    qrId,
+    branchId: String(branch._id),
+    vendorId: branch.vendorId,
+    type: typeRaw,     // ✅ REQUIRED
+    label: label,      // ✅ REQUIRED
+    number: qrNumber,
+    qrUrl: qrImage,
+    active: true,
+  });
+
+  created.push({
+    qrId: doc.qrId,
+    branchId: doc.branchId,
+    vendorId: doc.vendorId,
+    type: doc.type,
+    label: doc.label,
+    number: doc.number,
+    qrUrl: doc.qrUrl,
+    active: doc.active,
+    _id: doc._id,
+    createdAt: doc.createdAt,
+    updatedAt: doc.updatedAt,
+    __v: doc.__v,
+    encodedUrl: customerUrl,
+  });
+}
+    // const created = [];
+    // for (let i = 0; i < count; i++) {
+    //   const suffix = startIndex + i;
+    //   const qrId = await generateQrId();
+    //   const qrNumber = `${typeRaw}-${suffix}`;
+
+    //   // ✅ NEW customer URL encoding (slug in PATH)
+    //   const customerUrl = buildCustomerQrUrl({
+    //     baseUrl: PUBLIC_MENU_BASE_URL,
+    //     publicSlug,
+    //     typeRaw,
+    //     qrId,
+    //     qrNumber,
+    //   });
+
+    //   const qrImage = await QRCode.toDataURL(customerUrl);
+
+    //   const doc = await QrCode.create({
+    //     qrId,
+    //     branchId: String(branch._id),
+    //     vendorId: branch.vendorId,
+    //     label,                 // ✅ ALWAYS SAVED NOW
+    //     label,
+    //     number: qrNumber,
+    //     qrUrl: qrImage,
+    //     active: true,
+    //   });
+
+    //   created.push({
+    //     qrId: doc.qrId,
+    //     branchId: doc.branchId,
+    //     vendorId: doc.vendorId,
+    //     type: doc.type,
+    //     label: doc.label,      // ✅ will show "Table 1"
+    //     number: doc.number,
+    //     qrUrl: doc.qrUrl,
+    //     active: doc.active,
+    //     _id: doc._id,
+    //     createdAt: doc.createdAt,
+    //     updatedAt: doc.updatedAt,
+    //     __v: doc.__v,
+    //     encodedUrl: customerUrl, // ✅ helpful for debugging
+    //   });
+    // }
 
     return res.status(201).json({
       message: "QR codes generated successfully",
