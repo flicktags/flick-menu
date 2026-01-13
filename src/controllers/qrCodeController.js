@@ -824,7 +824,19 @@ async function resolveQrContext(req) {
   const branchBizId = String(req.query?.branch || "").trim();    // BR-000005 (optional)
   const type = String(req.query?.type || "").trim().toLowerCase(); // optional
   const number = String(req.query?.number || "").trim();           // optional
+  const qridtest = await QrCode.findOne({ qrId }).lean();
 
+  if (!qridtest) {
+    const err = new Error("qrId is required");
+    err.status = 400;
+    throw err;
+  }
+
+if (!type || !number) {
+    const err = new Error("type and number are required");
+    err.status = 400;
+    throw err;
+  }
   if (!qrId) {
     const err = new Error("qrId is required");
     err.status = 400;
