@@ -22,15 +22,26 @@ function suffixOf(numStr) {
 }
 // controllers/qrCodeController.js
 
+function normalizeBaseUrl(url) {
+  let u = String(url || "").trim();
+  if (!u) return "";
+  u = u.replace(/\/+$/, ""); // remove trailing slashes
+  return u;
+}
+
 function buildCustomerQrUrl({ baseUrl, publicSlug, typeRaw, qrId, qrNumber }) {
   const base = normalizeBaseUrl(baseUrl);
   const slug = String(publicSlug || "").trim();
 
+  if (!base) throw new Error("PUBLIC_MENU_BASE_URL is empty");
+  if (!slug) throw new Error("publicSlug is empty");
+
   // Keep slug clean: no leading slashes
   const cleanSlug = slug.replace(/^\/+/, "");
 
+  // ✅ IMPORTANT: add "/" between base and slug
   return (
-    `${base}${encodeURIComponent(cleanSlug)}` +
+    `${base}/${encodeURIComponent(cleanSlug)}` +
     `?type=${encodeURIComponent(typeRaw)}` +
     `&qrId=${encodeURIComponent(qrId)}` +
     `&number=${encodeURIComponent(qrNumber)}`
@@ -130,7 +141,9 @@ const generateQr = async (req, res) => {
       const lastOfType = await QrCode.find({
         branchId: { $in: [String(branch._id), branch._id] },
         vendorId: branch.vendorId,
-        type: { $in: [typeRaw, typeRaw.charAt(0).toUpperCase() + typeRaw.slice(1)] }, // legacy mix
+        type: {
+          $in: [typeRaw, typeRaw.charAt(0).toUpperCase() + typeRaw.slice(1)],
+        }, // legacy mix
       })
         .select("number")
         .sort({ createdAt: -1, _id: -1 })
@@ -143,8 +156,9 @@ const generateQr = async (req, res) => {
     const startIndex = prevTypeCounter + 1;
 
     // ✅ Base URL for customer menu (set in env, fallback to your production domain)
+    // Use ONE env name consistently. Keep your existing name if you already set it.
     const PUBLIC_MENU_BASE_URL =
-      process.env.PUBLIC_MENU_BASE_URL || "https://menu.vuedine.com/";
+      process.env.PUBLIC_MENU_BASE_URL || "https://menu.vuedine.com";
 
     // 7) Create docs
     const created = [];
@@ -188,8 +202,7 @@ const generateQr = async (req, res) => {
         createdAt: doc.createdAt,
         updatedAt: doc.updatedAt,
         __v: doc.__v,
-        // Optional: return what was encoded (helps debugging)
-        encodedUrl: customerUrl,
+        encodedUrl: customerUrl, // ✅ helpful for debugging
       });
     }
 
@@ -204,6 +217,197 @@ const generateQr = async (req, res) => {
     return res.status(500).json({ message: error.message });
   }
 };
+
+
+// function buildCustomerQrUrl({ baseUrl, publicSlug, typeRaw, qrId, qrNumber }) {
+//   const base = normalizeBaseUrl(baseUrl);
+//   const slug = String(publicSlug || "").trim();
+
+//   // Keep slug clean: no leading slashes
+//   const cleanSlug = slug.replace(/^\/+/, "");
+
+//   return (
+//     `${base}${encodeURIComponent(cleanSlug)}` +
+//     `?type=${encodeURIComponent(typeRaw)}` +
+//     `&qrId=${encodeURIComponent(qrId)}` +
+//     `&number=${encodeURIComponent(qrNumber)}`
+//   );
+// }
+
+// function normalizeBaseUrl(url) {
+//   let u = String(url || "").trim();
+//   if (!u) return "";
+//   u = u.replace(/\/+$/, ""); // remove trailing slashes
+//   return u;
+// }
+
+// // controllers/qrCodeController.js
+// const generateQr = async (req, res) => {
+//   try {
+//     // 1) Auth
+//     const bearer = getBearerToken(req);
+//     const token = bearer || req.body?.token;
+//     if (!token)
+//       return res.status(400).json({ message: "Firebase token required" });
+
+//     const decoded = await admin.auth().verifyIdToken(token);
+//     const uid = decoded.uid;
+
+//     // 2) Inputs
+//     const branchBusinessId = String(req.body?.branchId || "").trim(); // e.g., "BR-000004"
+//     const typeRaw = String(req.body?.type || "").trim().toLowerCase();
+//     const numberOfQrsRaw = req.body?.numberOfQrs;
+//     const labelRaw = req.body?.label;
+
+//     if (
+//       !branchBusinessId ||
+//       !typeRaw ||
+//       numberOfQrsRaw === undefined ||
+//       numberOfQrsRaw === null
+//     ) {
+//       return res.status(400).json({
+//         message: "Missing required fields (branchId, type, numberOfQrs)",
+//       });
+//     }
+
+//     if (!["table", "room"].includes(typeRaw)) {
+//       return res.status(400).json({ message: 'type must be "table" or "room"' });
+//     }
+
+//     const count = parseInt(numberOfQrsRaw, 10);
+//     if (!Number.isFinite(count) || count <= 0) {
+//       return res
+//         .status(400)
+//         .json({ message: "numberOfQrs must be a positive integer" });
+//     }
+
+//     const label =
+//       typeof labelRaw === "string" && labelRaw.trim().length > 0
+//         ? labelRaw.trim()
+//         : undefined;
+
+//     // 3) Branch (by business id) + vendor from branch
+//     const branch = await Branch.findOne({ branchId: branchBusinessId }).lean();
+//     if (!branch) return res.status(404).json({ message: "Branch not found" });
+
+//     // ✅ IMPORTANT: we need publicSlug to generate the correct QR URL
+//     const publicSlug = String(branch.publicSlug || "").trim();
+//     if (!publicSlug) {
+//       return res.status(400).json({
+//         message:
+//           "publicSlug missing for this branch. Generate/assign branch publicSlug first.",
+//       });
+//     }
+
+//     // 4) Permission: vendor owner OR branch manager
+//     const vendor = await Vendor.findOne({ vendorId: branch.vendorId }).lean();
+//     const isVendorOwner = !!vendor && vendor.userId === uid;
+//     const isBranchManager = branch.userId === uid;
+
+//     if (!isVendorOwner && !isBranchManager) {
+//       return res.status(403).json({ message: "Forbidden" });
+//     }
+
+//     // 5) Enforce overall limit atomically
+//     const incField = typeRaw === "table" ? "qrGeneratedTable" : "qrGeneratedRoom";
+//     const filter = {
+//       branchId: branchBusinessId,
+//       $expr: { $lte: [{ $add: ["$qrGenerated", count] }, "$qrLimit"] },
+//     };
+
+//     const prev = await Branch.findOneAndUpdate(
+//       filter,
+//       { $inc: { qrGenerated: count, [incField]: count } },
+//       { new: false }
+//     ).lean();
+
+//     if (!prev) {
+//       return res.status(400).json({
+//         message:
+//           "QR limit exceeded or branch not found (concurrent request). Please try a smaller count.",
+//       });
+//     }
+
+//     // 6) Build sequential numbers per type (backfill safe)
+//     let prevTypeCounter = Number(prev?.[incField]);
+//     if (!Number.isFinite(prevTypeCounter)) {
+//       const lastOfType = await QrCode.find({
+//         branchId: { $in: [String(branch._id), branch._id] },
+//         vendorId: branch.vendorId,
+//         type: { $in: [typeRaw, typeRaw.charAt(0).toUpperCase() + typeRaw.slice(1)] }, // legacy mix
+//       })
+//         .select("number")
+//         .sort({ createdAt: -1, _id: -1 })
+//         .limit(1)
+//         .lean();
+
+//       const maxSuffix = suffixOf(lastOfType?.[0]?.number);
+//       prevTypeCounter = Number.isFinite(maxSuffix) ? Math.max(0, maxSuffix) : 0;
+//     }
+//     const startIndex = prevTypeCounter + 1;
+
+//     // ✅ Base URL for customer menu (set in env, fallback to your production domain)
+//     const PUBLIC_MENU_BASE_URL =
+//       process.env.PUBLIC_MENU_BASE_URL || "https://menu.vuedine.com/";
+
+//     // 7) Create docs
+//     const created = [];
+//     for (let i = 0; i < count; i++) {
+//       const suffix = startIndex + i;
+//       const qrId = await generateQrId();
+//       const qrNumber = `${typeRaw}-${suffix}`;
+
+//       // ✅ NEW customer URL encoding (slug in PATH)
+//       const customerUrl = buildCustomerQrUrl({
+//         baseUrl: PUBLIC_MENU_BASE_URL,
+//         publicSlug,
+//         typeRaw,
+//         qrId,
+//         qrNumber,
+//       });
+
+//       const qrImage = await QRCode.toDataURL(customerUrl);
+
+//       const doc = await QrCode.create({
+//         qrId,
+//         branchId: String(branch._id),
+//         vendorId: branch.vendorId,
+//         type: typeRaw, // store lowercase
+//         label,
+//         number: qrNumber,
+//         qrUrl: qrImage,
+//         active: true,
+//       });
+
+//       created.push({
+//         qrId: doc.qrId,
+//         branchId: doc.branchId,
+//         vendorId: doc.vendorId,
+//         type: doc.type,
+//         label: doc.label,
+//         number: doc.number,
+//         qrUrl: doc.qrUrl,
+//         active: doc.active,
+//         _id: doc._id,
+//         createdAt: doc.createdAt,
+//         updatedAt: doc.updatedAt,
+//         __v: doc.__v,
+//         // Optional: return what was encoded (helps debugging)
+//         encodedUrl: customerUrl,
+//       });
+//     }
+
+//     return res.status(201).json({
+//       message: "QR codes generated successfully",
+//       generated: created.length,
+//       startFrom: startIndex,
+//       qrs: created,
+//     });
+//   } catch (error) {
+//     console.error("QR Generate Error:", error);
+//     return res.status(500).json({ message: error.message });
+//   }
+// };
 
 // const generateQr = async (req, res) => {
 //   try {
