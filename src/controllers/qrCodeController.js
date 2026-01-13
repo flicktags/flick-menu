@@ -819,26 +819,55 @@ async function buildMetaForBranch(branch) {
  * - branch (optional business id; if provided must match QR's branch)
  * - type & number (optional; if provided must match QR)
  */
+// async function resolveQrContext(req) {
+//   const qrId = String(req.query?.qrId || req.query?.qr || "").trim();
+//   const branchBizId = String(req.query?.branch || "").trim();    // BR-000005 (optional)
+//   const type = String(req.query?.type || "").trim().toLowerCase(); // optional
+//   const number = String(req.query?.number || "").trim();           // optional
+//   const qridtest = await QrCode.findOne({ qrId }).lean();
+
+//   if (!qridtest) {
+//     const err = new Error("qrId is required");
+//     err.status = 400;
+//     throw err;
+//   }
+
+// if (!type || !number) {
+//     const err = new Error("type and number are required");
+//     err.status = 400;
+//     throw err;
+//   }
+//   if (!qrId) {
+//     const err = new Error("qrId is required");
+//     err.status = 400;
+//     throw err;
+//   }
+
+//   const qr = await QrCode.findOne({ qrId }).lean();
+//   if (!qr) {
+//     const err = new Error("QR not found");
+//     err.status = 404;
+//     throw err;
+//   }
+//   if (qr.active === false) {
+//     const err = new Error("QR is inactive");
+//     err.status = 410; // Gone
+//     throw err;
+//   }
 async function resolveQrContext(req) {
   const qrId = String(req.query?.qrId || req.query?.qr || "").trim();
-  const branchBizId = String(req.query?.branch || "").trim();    // BR-000005 (optional)
-  const type = String(req.query?.type || "").trim().toLowerCase(); // optional
-  const number = String(req.query?.number || "").trim();           // optional
-  const qridtest = await QrCode.findOne({ qrId }).lean();
+  const branchBizId = String(req.query?.branch || "").trim(); // optional
+  const type = String(req.query?.type || "").trim().toLowerCase();
+  const number = String(req.query?.number || "").trim();
 
-  if (!qridtest) {
-    const err = new Error("qrId is required");
-    err.status = 400;
-    throw err;
-  }
-
-if (!type || !number) {
-    const err = new Error("type and number are required");
-    err.status = 400;
-    throw err;
-  }
   if (!qrId) {
     const err = new Error("qrId is required");
+    err.status = 400;
+    throw err;
+  }
+
+  if (!type || !number) {
+    const err = new Error("type and number are required");
     err.status = 400;
     throw err;
   }
@@ -849,12 +878,25 @@ if (!type || !number) {
     err.status = 404;
     throw err;
   }
+
   if (qr.active === false) {
     const err = new Error("QR is inactive");
-    err.status = 410; // Gone
+    err.status = 410;
     throw err;
   }
 
+  // type/number integrity checks (VERY IMPORTANT)
+  if (String(qr.type || "").toLowerCase() !== type) {
+    const err = new Error("type mismatch for QR");
+    err.status = 409;
+    throw err;
+  }
+
+  if (String(qr.number || "") !== number) {
+    const err = new Error("number mismatch for QR");
+    err.status = 409;
+    throw err;
+  }
   // Load branch via QR's stored branchId (Mongo _id string)
   let branch = null;
   if (isObjectId(qr.branchId)) {
