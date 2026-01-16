@@ -341,6 +341,9 @@ export const updateBranchInformation = async (req, res) => {
       if (b.taxes.serviceChargePercentage !== undefined) {
         branch.taxes.serviceChargePercentage = Number(b.taxes.serviceChargePercentage);
       }
+      if (b.taxes.isVatInclusive !== undefined) {
+      branch.taxes.isVatInclusive = !!b.taxes.isVatInclusive;
+      }
     }
 
     // QR Settings
