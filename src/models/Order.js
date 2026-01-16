@@ -6,6 +6,7 @@ const OrderSchema = new mongoose.Schema(
   {
     // Existing fields (unchanged)
     orderNumber: { type: String, unique: true, required: true }, // e.g. 2025101923000040000004
+    publicToken: { type: String, required: true, index: true }, // ✅ NEW
     branchId: { type: String, required: true },                  // BR-000004
     currency: { type: String, required: true },                  // BHD
     qr: {

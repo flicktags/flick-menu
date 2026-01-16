@@ -255,6 +255,7 @@ import mongoose from "mongoose";
 import Branch from "../models/Branch.js";
 import Order from "../models/Order.js";
 import MenuItem from "../models/MenuItem.js"; 
+import crypto from "crypto";
 import { nextSeqByKey } from "../models/Counter.js";
 
 // ---------- helpers ----------
@@ -649,6 +650,9 @@ export const createOrder = async (req, res) => {
   }
 }
 
+const publicToken = crypto.randomBytes(16).toString("hex"); // 32 chars
+
+
     // --------------------------------------
     // 4) Create order (your existing orderNumber/token logic)
     // --------------------------------------
@@ -666,6 +670,7 @@ export const createOrder = async (req, res) => {
       remarks: remarks || null,
       source,
       status: "Pending",
+      publicToken, // ✅ NEW
       clientCreatedAt: parsedClientCreatedAt,
       clientTzOffsetMinutes: parsedOffset,
 
@@ -697,6 +702,7 @@ export const createOrder = async (req, res) => {
             id: String(created._id),
             orderNumber: created.orderNumber,
             tokenNumber: created.tokenNumber,
+            publicToken: created.publicToken, // ✅ NEW
             vendorId: created.vendorId,
             branchId: created.branchId,
             currency: created.currency,
@@ -732,6 +738,48 @@ export const createOrder = async (req, res) => {
   }
 };
 
+export const getPublicOrderById = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const token = String(req.query.token || "").trim();
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ error: "Invalid order id" });
+    }
+    if (!token) {
+      return res.status(400).json({ error: "Missing token" });
+    }
+
+    const order = await Order.findById(id).lean();
+    if (!order) return res.status(404).json({ error: "Order not found" });
+
+    if (String(order.publicToken || "") !== token) {
+      return res.status(403).json({ error: "Invalid token" });
+    }
+
+    return res.status(200).json({
+      order: {
+        id: String(order._id),
+        orderNumber: order.orderNumber,
+        tokenNumber: order.tokenNumber,
+        branchId: order.branchId,
+        currency: order.currency,
+        status: order.status,
+        qr: order.qr,
+        customer: order.customer,
+        items: order.items,
+        pricing: order.pricing,
+        remarks: order.remarks ?? null,
+        source: order.source ?? "customer_view",
+        placedAt: order.placedAt ?? null,
+        createdAt: order.createdAt ?? null,
+      },
+    });
+  } catch (err) {
+    console.error("getPublicOrderById error:", err);
+    return res.status(500).json({ error: err.message || "Server error" });
+  }
+};
 
 
 // export const createOrder = async (req, res) => {
