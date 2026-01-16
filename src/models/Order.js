@@ -50,6 +50,8 @@ const OrderSchema = new mongoose.Schema(
     // ---- NEW FIELDS (added, not replacing anything) ----
     vendorId: { type: String, required: true, index: true }, // for ownership + summaries
     tokenNumber: { type: Number, index: true },              // small per-day token shown to customer
+    clientCreatedAt: { type: Date, default: null, index: true }, // parsed from ISO sent by client
+    clientTzOffsetMinutes: { type: Number, default: null }, 
   },
   { timestamps: true }
 );

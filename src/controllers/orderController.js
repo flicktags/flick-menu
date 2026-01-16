@@ -363,6 +363,8 @@ export const createOrder = async (req, res) => {
       items,
       remarks,
       source = "customer_view",
+      clientCreatedAt,
+      clientTzOffsetMinutes,
     } = req.body || {};
 
     if (!branchCode) return res.status(400).json({ error: "Missing branch" });
@@ -628,6 +630,25 @@ export const createOrder = async (req, res) => {
       subtotalExVat,
     };
 
+    let parsedClientCreatedAt = null;
+
+    if (clientCreatedAt) {
+    const dt = new Date(clientCreatedAt);
+    if (!isNaN(dt.getTime())) {
+    parsedClientCreatedAt = dt; // stored as UTC Date internally (Mongo)
+    }
+  }
+
+    // offset minutes validation (optional, but recommended)
+    let parsedOffset = null;
+    if (clientTzOffsetMinutes !== undefined && clientTzOffsetMinutes !== null) {
+    const off = Number(clientTzOffsetMinutes);
+    // time zones are roughly between -840 and +840 minutes
+    if (!Number.isNaN(off) && off >= -840 && off <= 840) {
+    parsedOffset = off;
+  }
+}
+
     // --------------------------------------
     // 4) Create order (your existing orderNumber/token logic)
     // --------------------------------------
@@ -645,6 +666,11 @@ export const createOrder = async (req, res) => {
       remarks: remarks || null,
       source,
       status: "Pending",
+      clientCreatedAt: parsedClientCreatedAt,
+      clientTzOffsetMinutes: parsedOffset,
+
+      // ✅ business timestamp (use client if available)
+      placedAt: parsedClientCreatedAt || new Date(),
     };
 
     const counterKey = `orders:daily:${vendorId}:${branch.branchId}:${ymd}`;
@@ -682,6 +708,9 @@ export const createOrder = async (req, res) => {
             remarks: created.remarks ?? null,
             source: created.source ?? "customer_view",
             createdAt: created.createdAt,
+            placedAt: created.placedAt,
+            clientCreatedAt: created.clientCreatedAt,
+            clientTzOffsetMinutes: created.clientTzOffsetMinutes,
           },
         });
       } catch (e) {
