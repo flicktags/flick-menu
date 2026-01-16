@@ -216,51 +216,6 @@ for (let i = 0; i < count; i++) {
     encodedUrl: customerUrl,
   });
 }
-    // const created = [];
-    // for (let i = 0; i < count; i++) {
-    //   const suffix = startIndex + i;
-    //   const qrId = await generateQrId();
-    //   const qrNumber = `${typeRaw}-${suffix}`;
-
-    //   // ✅ NEW customer URL encoding (slug in PATH)
-    //   const customerUrl = buildCustomerQrUrl({
-    //     baseUrl: PUBLIC_MENU_BASE_URL,
-    //     publicSlug,
-    //     typeRaw,
-    //     qrId,
-    //     qrNumber,
-    //   });
-
-    //   const qrImage = await QRCode.toDataURL(customerUrl);
-
-    //   const doc = await QrCode.create({
-    //     qrId,
-    //     branchId: String(branch._id),
-    //     vendorId: branch.vendorId,
-    //     label,                 // ✅ ALWAYS SAVED NOW
-    //     label,
-    //     number: qrNumber,
-    //     qrUrl: qrImage,
-    //     active: true,
-    //   });
-
-    //   created.push({
-    //     qrId: doc.qrId,
-    //     branchId: doc.branchId,
-    //     vendorId: doc.vendorId,
-    //     type: doc.type,
-    //     label: doc.label,      // ✅ will show "Table 1"
-    //     number: doc.number,
-    //     qrUrl: doc.qrUrl,
-    //     active: doc.active,
-    //     _id: doc._id,
-    //     createdAt: doc.createdAt,
-    //     updatedAt: doc.updatedAt,
-    //     __v: doc.__v,
-    //     encodedUrl: customerUrl, // ✅ helpful for debugging
-    //   });
-    // }
-
     return res.status(201).json({
       message: "QR codes generated successfully",
       generated: created.length,
@@ -273,317 +228,6 @@ for (let i = 0; i < count; i++) {
   }
 };
 
-
-// function buildCustomerQrUrl({ baseUrl, publicSlug, typeRaw, qrId, qrNumber }) {
-//   const base = normalizeBaseUrl(baseUrl);
-//   const slug = String(publicSlug || "").trim();
-
-//   // Keep slug clean: no leading slashes
-//   const cleanSlug = slug.replace(/^\/+/, "");
-
-//   return (
-//     `${base}${encodeURIComponent(cleanSlug)}` +
-//     `?type=${encodeURIComponent(typeRaw)}` +
-//     `&qrId=${encodeURIComponent(qrId)}` +
-//     `&number=${encodeURIComponent(qrNumber)}`
-//   );
-// }
-
-// function normalizeBaseUrl(url) {
-//   let u = String(url || "").trim();
-//   if (!u) return "";
-//   u = u.replace(/\/+$/, ""); // remove trailing slashes
-//   return u;
-// }
-
-// // controllers/qrCodeController.js
-// const generateQr = async (req, res) => {
-//   try {
-//     // 1) Auth
-//     const bearer = getBearerToken(req);
-//     const token = bearer || req.body?.token;
-//     if (!token)
-//       return res.status(400).json({ message: "Firebase token required" });
-
-//     const decoded = await admin.auth().verifyIdToken(token);
-//     const uid = decoded.uid;
-
-//     // 2) Inputs
-//     const branchBusinessId = String(req.body?.branchId || "").trim(); // e.g., "BR-000004"
-//     const typeRaw = String(req.body?.type || "").trim().toLowerCase();
-//     const numberOfQrsRaw = req.body?.numberOfQrs;
-//     const labelRaw = req.body?.label;
-
-//     if (
-//       !branchBusinessId ||
-//       !typeRaw ||
-//       numberOfQrsRaw === undefined ||
-//       numberOfQrsRaw === null
-//     ) {
-//       return res.status(400).json({
-//         message: "Missing required fields (branchId, type, numberOfQrs)",
-//       });
-//     }
-
-//     if (!["table", "room"].includes(typeRaw)) {
-//       return res.status(400).json({ message: 'type must be "table" or "room"' });
-//     }
-
-//     const count = parseInt(numberOfQrsRaw, 10);
-//     if (!Number.isFinite(count) || count <= 0) {
-//       return res
-//         .status(400)
-//         .json({ message: "numberOfQrs must be a positive integer" });
-//     }
-
-//     const label =
-//       typeof labelRaw === "string" && labelRaw.trim().length > 0
-//         ? labelRaw.trim()
-//         : undefined;
-
-//     // 3) Branch (by business id) + vendor from branch
-//     const branch = await Branch.findOne({ branchId: branchBusinessId }).lean();
-//     if (!branch) return res.status(404).json({ message: "Branch not found" });
-
-//     // ✅ IMPORTANT: we need publicSlug to generate the correct QR URL
-//     const publicSlug = String(branch.publicSlug || "").trim();
-//     if (!publicSlug) {
-//       return res.status(400).json({
-//         message:
-//           "publicSlug missing for this branch. Generate/assign branch publicSlug first.",
-//       });
-//     }
-
-//     // 4) Permission: vendor owner OR branch manager
-//     const vendor = await Vendor.findOne({ vendorId: branch.vendorId }).lean();
-//     const isVendorOwner = !!vendor && vendor.userId === uid;
-//     const isBranchManager = branch.userId === uid;
-
-//     if (!isVendorOwner && !isBranchManager) {
-//       return res.status(403).json({ message: "Forbidden" });
-//     }
-
-//     // 5) Enforce overall limit atomically
-//     const incField = typeRaw === "table" ? "qrGeneratedTable" : "qrGeneratedRoom";
-//     const filter = {
-//       branchId: branchBusinessId,
-//       $expr: { $lte: [{ $add: ["$qrGenerated", count] }, "$qrLimit"] },
-//     };
-
-//     const prev = await Branch.findOneAndUpdate(
-//       filter,
-//       { $inc: { qrGenerated: count, [incField]: count } },
-//       { new: false }
-//     ).lean();
-
-//     if (!prev) {
-//       return res.status(400).json({
-//         message:
-//           "QR limit exceeded or branch not found (concurrent request). Please try a smaller count.",
-//       });
-//     }
-
-//     // 6) Build sequential numbers per type (backfill safe)
-//     let prevTypeCounter = Number(prev?.[incField]);
-//     if (!Number.isFinite(prevTypeCounter)) {
-//       const lastOfType = await QrCode.find({
-//         branchId: { $in: [String(branch._id), branch._id] },
-//         vendorId: branch.vendorId,
-//         type: { $in: [typeRaw, typeRaw.charAt(0).toUpperCase() + typeRaw.slice(1)] }, // legacy mix
-//       })
-//         .select("number")
-//         .sort({ createdAt: -1, _id: -1 })
-//         .limit(1)
-//         .lean();
-
-//       const maxSuffix = suffixOf(lastOfType?.[0]?.number);
-//       prevTypeCounter = Number.isFinite(maxSuffix) ? Math.max(0, maxSuffix) : 0;
-//     }
-//     const startIndex = prevTypeCounter + 1;
-
-//     // ✅ Base URL for customer menu (set in env, fallback to your production domain)
-//     const PUBLIC_MENU_BASE_URL =
-//       process.env.PUBLIC_MENU_BASE_URL || "https://menu.vuedine.com/";
-
-//     // 7) Create docs
-//     const created = [];
-//     for (let i = 0; i < count; i++) {
-//       const suffix = startIndex + i;
-//       const qrId = await generateQrId();
-//       const qrNumber = `${typeRaw}-${suffix}`;
-
-//       // ✅ NEW customer URL encoding (slug in PATH)
-//       const customerUrl = buildCustomerQrUrl({
-//         baseUrl: PUBLIC_MENU_BASE_URL,
-//         publicSlug,
-//         typeRaw,
-//         qrId,
-//         qrNumber,
-//       });
-
-//       const qrImage = await QRCode.toDataURL(customerUrl);
-
-//       const doc = await QrCode.create({
-//         qrId,
-//         branchId: String(branch._id),
-//         vendorId: branch.vendorId,
-//         type: typeRaw, // store lowercase
-//         label,
-//         number: qrNumber,
-//         qrUrl: qrImage,
-//         active: true,
-//       });
-
-//       created.push({
-//         qrId: doc.qrId,
-//         branchId: doc.branchId,
-//         vendorId: doc.vendorId,
-//         type: doc.type,
-//         label: doc.label,
-//         number: doc.number,
-//         qrUrl: doc.qrUrl,
-//         active: doc.active,
-//         _id: doc._id,
-//         createdAt: doc.createdAt,
-//         updatedAt: doc.updatedAt,
-//         __v: doc.__v,
-//         // Optional: return what was encoded (helps debugging)
-//         encodedUrl: customerUrl,
-//       });
-//     }
-
-//     return res.status(201).json({
-//       message: "QR codes generated successfully",
-//       generated: created.length,
-//       startFrom: startIndex,
-//       qrs: created,
-//     });
-//   } catch (error) {
-//     console.error("QR Generate Error:", error);
-//     return res.status(500).json({ message: error.message });
-//   }
-// };
-
-// const generateQr = async (req, res) => {
-//   try {
-//     // 1) Auth
-//     const bearer = getBearerToken(req);
-//     const token = bearer || req.body?.token;
-//     if (!token) return res.status(400).json({ message: "Firebase token required" });
-
-//     const decoded = await admin.auth().verifyIdToken(token);
-//     const uid = decoded.uid;
-
-//     // 2) Inputs
-//     const branchBusinessId = String(req.body?.branchId || "").trim(); // e.g., "BR-000004"
-//     const typeRaw = String(req.body?.type || "").trim().toLowerCase();
-//     const numberOfQrsRaw = req.body?.numberOfQrs;
-//     const labelRaw = req.body?.label;
-
-//     if (!branchBusinessId || !typeRaw || numberOfQrsRaw === undefined || numberOfQrsRaw === null) {
-//       return res.status(400).json({ message: "Missing required fields (branchId, type, numberOfQrs)" });
-//     }
-//     if (!["table", "room"].includes(typeRaw)) {
-//       return res.status(400).json({ message: 'type must be "table" or "room"' });
-//     }
-//     const count = parseInt(numberOfQrsRaw, 10);
-//     if (!Number.isFinite(count) || count <= 0) {
-//       return res.status(400).json({ message: "numberOfQrs must be a positive integer" });
-//     }
-//     const label = typeof labelRaw === "string" && labelRaw.trim().length > 0 ? labelRaw.trim() : undefined;
-
-//     // 3) Branch (by business id) + vendor from branch
-//     const branch = await Branch.findOne({ branchId: branchBusinessId }).lean();
-//     if (!branch) return res.status(404).json({ message: "Branch not found" });
-
-//     // 4) Permission: vendor owner OR branch manager
-//     const vendor = await Vendor.findOne({ vendorId: branch.vendorId }).lean();
-//     const isVendorOwner = !!vendor && vendor.userId === uid;
-//     const isBranchManager = branch.userId === uid;
-
-//     if (!isVendorOwner && !isBranchManager) {
-//       return res.status(403).json({ message: "Forbidden" });
-//     }
-
-//     // 5) Enforce overall limit atomically
-//     const incField = typeRaw === "table" ? "qrGeneratedTable" : "qrGeneratedRoom";
-//     const filter = {
-//       branchId: branchBusinessId,
-//       $expr: { $lte: [{ $add: ["$qrGenerated", count] }, "$qrLimit"] },
-//     };
-//     const prev = await Branch.findOneAndUpdate(
-//       filter,
-//       { $inc: { qrGenerated: count, [incField]: count } },
-//       { new: false }
-//     ).lean();
-//     if (!prev) {
-//       return res.status(400).json({
-//         message: "QR limit exceeded or branch not found (concurrent request). Please try a smaller count.",
-//       });
-//     }
-
-//     // 6) Build sequential numbers per type (backfill safe)
-//     let prevTypeCounter = Number(prev?.[incField]);
-//     if (!Number.isFinite(prevTypeCounter)) {
-//       const lastOfType = await QrCode.find({
-//         branchId: { $in: [String(branch._id), branch._id] },
-//         vendorId: branch.vendorId,
-//         type: { $in: [typeRaw, typeRaw.charAt(0).toUpperCase() + typeRaw.slice(1)] }, // legacy mix
-//       }).select("number").sort({ createdAt: -1, _id: -1 }).limit(1).lean();
-//       const maxSuffix = suffixOf(lastOfType?.[0]?.number);
-//       prevTypeCounter = Number.isFinite(maxSuffix) ? Math.max(0, maxSuffix) : 0;
-//     }
-//     const startIndex = prevTypeCounter + 1;
-
-//     // 7) Create docs
-//     const created = [];
-//     for (let i = 0; i < count; i++) {
-//       const suffix = startIndex + i;
-//       const qrId = await generateQrId();
-//       const qrNumber = `${typeRaw}-${suffix}`;
-
-//       const qrImage = await QRCode.toDataURL(
-//         `https://yourapp.com/lander?branch=${encodeURIComponent(branchBusinessId)}&type=${typeRaw}&qrId=${qrId}&number=${qrNumber}`
-//       );
-
-//       const doc = await QrCode.create({
-//         qrId,
-//         branchId: String(branch._id),
-//         vendorId: branch.vendorId,     // ✅ from branch (works for both roles)
-//         type: typeRaw,                 // store lowercase
-//         label,
-//         number: qrNumber,
-//         qrUrl: qrImage,
-//         active: true,
-//       });
-
-//       created.push({
-//         qrId: doc.qrId,
-//         branchId: doc.branchId,
-//         vendorId: doc.vendorId,
-//         type: doc.type,
-//         label: doc.label,
-//         number: doc.number,
-//         qrUrl: doc.qrUrl,
-//         active: doc.active,
-//         _id: doc._id,
-//         createdAt: doc.createdAt,
-//         updatedAt: doc.updatedAt,
-//         __v: doc.__v,
-//       });
-//     }
-
-//     return res.status(201).json({
-//       message: "QR codes generated successfully",
-//       generated: created.length,
-//       startFrom: startIndex,
-//       qrs: created,
-//     });
-//   } catch (error) {
-//     console.error("QR Generate Error:", error);
-//     return res.status(500).json({ message: error.message });
-//   }
-// };
 export default generateQr;
 
 /**
@@ -802,6 +446,7 @@ async function buildMetaForBranch(branch) {
         vendorId: v.vendorId || null,
         vatNumber: v?.billing?.vatNumber ?? null,
         vatRate: vatPct !== null ? vatPct / 100 : null, // 10 -> 0.10
+        
       };
 
       if (typeof v?.settings?.priceIncludesVat === "boolean") {
@@ -813,47 +458,6 @@ async function buildMetaForBranch(branch) {
   return { currency, vendor, settings };
 }
 
-/**
- * Resolve QR + Branch from request:
- * - qrId (required)
- * - branch (optional business id; if provided must match QR's branch)
- * - type & number (optional; if provided must match QR)
- */
-// async function resolveQrContext(req) {
-//   const qrId = String(req.query?.qrId || req.query?.qr || "").trim();
-//   const branchBizId = String(req.query?.branch || "").trim();    // BR-000005 (optional)
-//   const type = String(req.query?.type || "").trim().toLowerCase(); // optional
-//   const number = String(req.query?.number || "").trim();           // optional
-//   const qridtest = await QrCode.findOne({ qrId }).lean();
-
-//   if (!qridtest) {
-//     const err = new Error("qrId is required");
-//     err.status = 400;
-//     throw err;
-//   }
-
-// if (!type || !number) {
-//     const err = new Error("type and number are required");
-//     err.status = 400;
-//     throw err;
-//   }
-//   if (!qrId) {
-//     const err = new Error("qrId is required");
-//     err.status = 400;
-//     throw err;
-//   }
-
-//   const qr = await QrCode.findOne({ qrId }).lean();
-//   if (!qr) {
-//     const err = new Error("QR not found");
-//     err.status = 404;
-//     throw err;
-//   }
-//   if (qr.active === false) {
-//     const err = new Error("QR is inactive");
-//     err.status = 410; // Gone
-//     throw err;
-//   }
 async function resolveQrContext(req) {
   const qrId = String(req.query?.qrId || req.query?.qr || "").trim();
   const branchBizId = String(req.query?.branch || "").trim(); // optional
@@ -966,9 +570,17 @@ export const getQrMenuSections = async (req, res) => {
       }));
 
     const meta = await buildMetaForBranch(branch);
-
+    const taxes = {
+      vatPercentage: Number(branch?.taxes?.vatPercentage ?? 0) || 0,
+      serviceChargePercentage:
+        Number(branch?.taxes?.serviceChargePercentage ?? 0) || 0,
+      vatNumber: (branch?.taxes?.vatNumber ?? "").toString(),
+      // default TRUE if not set (as you wanted on registration)
+      isVatInclusive: branch?.taxes?.isVatInclusive !== false,
+    };
     return res.json({
       branchId: branch.branchId,
+      taxes,
       sections,
       ...meta,
       qr,
