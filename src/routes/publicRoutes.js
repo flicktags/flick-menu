@@ -32,6 +32,8 @@ import {
   getPublicThemeMappingAll,
 
 } from "../controllers/publicMenuController.js";
+import { createOrder } from "../controllers/orderController.js";       // ✅ ADD
+
 
 const router = express.Router();
 
@@ -46,6 +48,8 @@ router.get("/menu/grouped-tree", getPublicGroupedTree);
 // ⬇️ NEW (no auth):
 router.get("/menu/theme-mapping", getPublicThemeMapping);       // one section
 router.get("/menu/theme-mapping/all", getPublicThemeMappingAll); // all sections
+router.post("/orders", createOrder);
+
 
 
 export default router;
