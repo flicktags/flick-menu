@@ -79,6 +79,13 @@ const vatNumber =
   (vendor?.billing?.vatNumber && String(vendor.billing.vatNumber).trim()) ||
   "";
 
+  const isVatInclusive =
+      taxes?.isVatInclusive !== undefined
+        ? !!taxes.isVatInclusive
+        : (vendor?.taxes?.isVatInclusive !== undefined
+            ? !!vendor.taxes.isVatInclusive
+            : true);
+
     // create branch
     const branch = await Branch.create({
       branchId,
@@ -96,9 +103,11 @@ const vatNumber =
       currency,
       branding,
       taxes: {
-    vatPercentage: Number(vatPct) || 0,
-    serviceChargePercentage: Number(svcPct) || 0,
-    vatNumber, // ✅ NEW
+      vatPercentage: Number(vatPct) || 0,
+      serviceChargePercentage: Number(svcPct) || 0,
+      vatNumber, // ✅ NEW
+      isVatInclusive, // ✅ NEW
+
   },
       qrSettings,
 
@@ -117,75 +126,6 @@ const vatNumber =
     return res.status(500).json({ message: error.message });
   }
 };
-
-
-// export const registerBranch = async (req, res) => {
-//   try {
-//     const {
-//       token,
-//       vendorId,
-//       nameEnglish,
-//       nameArabic,
-//       venueType,
-//       serviceFeatures,
-//       openingHours,
-//       contact,
-//       address,
-//       timeZone,
-//       currency,
-//       branding,
-//       taxes,
-//       qrSettings,
-//       subscription,
-//     } = req.body;
-
-//     if (!token) {
-//       return res.status(400).json({ message: "Firebase token required" });
-//     }
-
-//     // verify Firebase token
-//     const decodedToken = await admin.auth().verifyIdToken(token);
-//     const userId = decodedToken.uid;
-
-//     // check vendor exists
-//     const vendor = await Vendor.findOne({ vendorId });
-//     if (!vendor) {
-//       return res.status(404).json({ message: "Vendor not found" });
-//     }
-
-
-
-//     // generate branchId
-//     const branchId = await generateBranchId();
-//     const publicSlug = await generateUniquePublicSlug(); // ✅ NEW
-
-//     // create branch
-//     const branch = await Branch.create({
-//       branchId,
-//       publicSlug, // ✅ NEW
-//       vendorId,
-//       userId,
-//       nameEnglish,
-//       nameArabic,
-//       venueType,
-//       serviceFeatures,
-//       openingHours,
-//       contact,
-//       address,
-//       timeZone,
-//       currency,
-//       branding,
-//       taxes,
-//       qrSettings,
-//       subscription,
-//     });
-
-//     res.status(201).json({ message: "Branch registered successfully", branch });
-//   } catch (error) {
-//     console.error("Branch Register Error:", error);
-//     res.status(500).json({ message: error.message });
-//   }
-// };
 
 
 // controllers/branchController.js

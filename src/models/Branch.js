@@ -49,15 +49,12 @@ const branchSchema = new mongoose.Schema(
       coverBannerLogo: String, 
       splashScreenEnabled: { type: Boolean, default: false },
  },
-    // taxes: { 
-    //   vatPercentage: Number, 
-    //   serviceChargePercentage: Number,  
-    //   vatNumber: { type: String, default: "" }, // ✅ NEW
-    // },
     taxes: {
       vatPercentage: { type: Number, default: 0 },
       serviceChargePercentage: { type: Number, default: 0 },
       vatNumber: { type: String, default: "" }, // ✅ NEW
+      isVatInclusive: { type: Boolean, default: true }, // ✅ NEW (best place)
+
     },
     qrSettings: { qrsAllowed: { type: Boolean, default: true }, noOfQrs: { type: Number, default: 0 } },
     // subscription: { plan: String, expiryDate: Date },
