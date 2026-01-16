@@ -251,9 +251,10 @@
 
 // src/controllers/orderController.js
 // src/controllers/orderController.js
+import mongoose from "mongoose";
 import Branch from "../models/Branch.js";
 import Order from "../models/Order.js";
-import MenuItem from "../models/MenuItem.js"; // ✅ rename to your actual item model file
+import MenuItem from "../models/MenuItem.js"; 
 import { nextSeqByKey } from "../models/Counter.js";
 
 // ---------- helpers ----------
