@@ -253,6 +253,7 @@
 // src/controllers/orderController.js
 import Branch from "../models/Branch.js";
 import Order from "../models/Order.js";
+import MenuItem from "../models/MenuItem.js"; // ✅ rename to your actual item model file
 import { nextSeqByKey } from "../models/Counter.js";
 
 // ---------- helpers ----------
@@ -349,6 +350,8 @@ async function resolveRange({ period, dateStr, dateFrom, dateTo, tz }) {
 }
 
 // ============ PUBLIC: place order (no token) ============
+
+// ============ PUBLIC: place order (server-calculated pricing) ============
 export const createOrder = async (req, res) => {
   try {
     const {
@@ -357,53 +360,302 @@ export const createOrder = async (req, res) => {
       currency,
       customer,
       items,
-      pricing, // client-provided for now
       remarks,
       source = "customer_view",
     } = req.body || {};
 
     if (!branchCode) return res.status(400).json({ error: "Missing branch" });
-    if (!Array.isArray(items) || items.length === 0)
+    if (!Array.isArray(items) || items.length === 0) {
       return res.status(400).json({ error: "No items" });
-    if (!pricing) return res.status(400).json({ error: "Missing pricing object" });
+    }
 
     const branch = await Branch.findOne({ branchId: branchCode }).lean();
     if (!branch) return res.status(404).json({ error: "Branch not found" });
+
+    // ✅ authoritative tax settings from branch
+    const taxes = (branch.taxes && typeof branch.taxes === "object") ? branch.taxes : {};
+    const vatPercent = Number(taxes.vatPercentage ?? 0) || 0;
+    const serviceChargePercent = Number(taxes.serviceChargePercentage ?? 0) || 0;
+    const isVatInclusive = taxes.isVatInclusive === true;
 
     const vendorId = branch.vendorId;
     const tz = branch.timeZone || "UTC";
     const { y, m, d, ymd } = tzPartsOf(new Date(), tz);
 
-    // Base doc shared across attempts
+    const round3 = (n) => Math.round((Number(n || 0) + Number.EPSILON) * 1000) / 1000;
+
+    // --------------------------------------
+    // 1) Build list of Mongo ObjectIds
+    // --------------------------------------
+    const rawIds = [...new Set(items.map((x) => String(x?.itemId || x?.id || "").trim()).filter(Boolean))];
+    if (rawIds.length === 0) return res.status(400).json({ error: "Invalid items payload (no itemId)" });
+
+    const objectIds = [];
+    for (const id of rawIds) {
+      if (!mongoose.Types.ObjectId.isValid(id)) {
+        return res.status(400).json({ error: "Invalid itemId", itemId: id });
+      }
+      objectIds.push(new mongoose.Types.ObjectId(id));
+    }
+
+    // ✅ fetch items AND enforce ownership (vendor/branch match) to prevent tampering
+    const dbItems = await MenuItem.find({
+      _id: { $in: objectIds },
+      vendorId: vendorId,
+      branchId: branch.branchId,
+      isActive: true,
+      isAvailable: true,
+    }).lean();
+
+    const itemMap = new Map(dbItems.map((it) => [String(it._id), it]));
+
+    const missing = rawIds.filter((id) => !itemMap.has(id));
+    if (missing.length) {
+      return res.status(400).json({
+        error: "Some items are not available for this branch/vendor",
+        missing,
+      });
+    }
+
+    // --------------------------------------
+    // 2) Server-priced items
+    // --------------------------------------
+    const now = new Date();
+    const orderItems = [];
+    let subtotal = 0;
+
+    // helper: apply discount to base price (not addons)
+    function applyDiscount(base, discount) {
+      if (!discount || typeof discount !== "object") return base;
+
+      const type = String(discount.type || "").trim();
+      const value = Number(discount.value ?? 0) || 0;
+      const validUntil = discount.validUntil ? new Date(discount.validUntil) : null;
+
+      if (validUntil && validUntil.getTime() < now.getTime()) return base; // expired
+      if (!type || value <= 0) return base;
+
+      if (type === "percentage") {
+        const off = base * (value / 100);
+        return Math.max(0, base - off);
+      }
+      if (type === "amount") {
+        return Math.max(0, base - value);
+      }
+      return base;
+    }
+
+    for (const reqIt of items) {
+      const mongoId = String(reqIt?.itemId || reqIt?.id || "").trim();
+      const qty = Math.max(parseInt(reqIt?.quantity || "1", 10) || 1, 1);
+
+      const dbIt = itemMap.get(mongoId);
+
+      // ---- base price (size OR fixed/offered)
+      let basePrice = 0;
+      let sizeObj = null;
+
+      if (dbIt.isSizedBased === true) {
+        const sizeLabel = String(reqIt?.size?.label || reqIt?.sizeLabel || "").trim();
+        if (!sizeLabel) {
+          return res.status(400).json({ error: "Missing size for sized item", itemId: mongoId });
+        }
+        const sizes = Array.isArray(dbIt.sizes) ? dbIt.sizes : [];
+        const matched = sizes.find((s) => String(s?.label || "").trim() === sizeLabel);
+        if (!matched) {
+          return res.status(400).json({ error: "Invalid size selected", itemId: mongoId, sizeLabel });
+        }
+        basePrice = Number(matched.price ?? 0) || 0;
+        sizeObj = { label: sizeLabel, price: round3(basePrice) };
+      } else {
+        const offered = (dbIt.offeredPrice !== undefined) ? (Number(dbIt.offeredPrice) || 0) : 0;
+        const fixed = Number(dbIt.fixedPrice ?? 0) || 0;
+        basePrice = offered > 0 ? offered : fixed;
+      }
+
+      // ---- discount (applies to base)
+      basePrice = applyDiscount(basePrice, dbIt.discount);
+
+      // ---- addons validation by group+option label (because your schema has no option id)
+      const reqAddons = Array.isArray(reqIt?.addons) ? reqIt.addons : [];
+
+      // group label -> array of selected option labels
+      const selectionsByGroup = new Map();
+      for (const a of reqAddons) {
+        const groupLabel = String(a?.groupLabel || a?.group || a?.addonGroup || "").trim();
+        const optionLabel = String(a?.optionLabel || a?.label || "").trim();
+        if (!optionLabel) {
+          return res.status(400).json({ error: "Invalid addon (missing option label)", itemId: mongoId });
+        }
+        const key = groupLabel || "__default__";
+        if (!selectionsByGroup.has(key)) selectionsByGroup.set(key, []);
+        selectionsByGroup.get(key).push(optionLabel);
+      }
+
+      const finalAddons = [];
+      let addonsTotal = 0;
+
+      const addonGroups = Array.isArray(dbIt.addons) ? dbIt.addons : [];
+
+      // validate each request selection against db groups
+      for (const [groupKey, optionLabels] of selectionsByGroup.entries()) {
+        // find group: match by label (case-insensitive). If groupKey == __default__, allow match across all groups.
+        let group = null;
+
+        if (groupKey !== "__default__") {
+          group = addonGroups.find(
+            (g) => String(g?.label || "").trim().toLowerCase() === groupKey.trim().toLowerCase()
+          );
+          if (!group) {
+            return res.status(400).json({ error: "Invalid addon group", itemId: mongoId, groupLabel: groupKey });
+          }
+        }
+
+        // enforce min/max when group exists
+        if (group) {
+          const min = Number(group.min ?? 0) || 0;
+          const max = Number(group.max ?? 1) || 1;
+
+          if (optionLabels.length < min) {
+            return res.status(400).json({ error: "Addon group below min", itemId: mongoId, groupLabel: groupKey, min });
+          }
+          if (optionLabels.length > max) {
+            return res.status(400).json({ error: "Addon group above max", itemId: mongoId, groupLabel: groupKey, max });
+          }
+        }
+
+        // resolve options
+        const allowedOptions = group
+          ? (Array.isArray(group.options) ? group.options : [])
+          : addonGroups.flatMap((g) => Array.isArray(g?.options) ? g.options : []);
+
+        for (const optLabel of optionLabels) {
+          const opt = allowedOptions.find(
+            (o) => String(o?.label || "").trim().toLowerCase() === optLabel.trim().toLowerCase()
+          );
+          if (!opt) {
+            return res.status(400).json({
+              error: "Invalid addon option",
+              itemId: mongoId,
+              groupLabel: groupKey === "__default__" ? null : groupKey,
+              optionLabel: optLabel,
+            });
+          }
+
+          const price = Number(opt.price ?? 0) || 0;
+          addonsTotal += price;
+
+          // id field in Order.items.addons: use sku if exists else label
+          finalAddons.push({
+            id: String(opt.sku || opt.label || "").trim(),
+            label: String(opt.label || "").trim(),
+            price: round3(price),
+          });
+        }
+      }
+
+      // also enforce required groups even if user didn’t send them
+      for (const g of addonGroups) {
+        if (g?.required === true) {
+          const key = String(g.label || "").trim().toLowerCase();
+          const selectedCount = (selectionsByGroup.get(g.label) || selectionsByGroup.get(key) || []).length;
+
+          const min = Number(g.min ?? 0) || 0;
+          if (selectedCount < Math.max(1, min)) {
+            return res.status(400).json({
+              error: "Required addon group missing",
+              itemId: mongoId,
+              groupLabel: g.label,
+            });
+          }
+        }
+      }
+
+      const unitBasePrice = round3(basePrice + addonsTotal);
+      const lineTotal = round3(unitBasePrice * qty);
+      subtotal = round3(subtotal + lineTotal);
+
+      orderItems.push({
+        itemId: mongoId, // ✅ store Mongo _id as string
+        nameEnglish: dbIt.nameEnglish || "",
+        nameArabic: dbIt.nameArabic || "",
+        imageUrl: dbIt.imageUrl || "",
+        isSizedBased: dbIt.isSizedBased === true,
+        size: sizeObj, // {label, price} or null
+        addons: finalAddons,
+        unitBasePrice,
+        quantity: qty,
+        notes: String(reqIt?.notes || ""),
+        lineTotal,
+      });
+    }
+
+    // --------------------------------------
+    // 3) Taxes & totals (server)
+    // --------------------------------------
+    const serviceChargeAmount = round3(subtotal * (serviceChargePercent / 100));
+    const vatBase = round3(subtotal + serviceChargeAmount);
+
+    let vatAmount = 0;
+    let grandTotal = 0;
+    let subtotalExVat = vatBase;
+
+    if (vatPercent > 0) {
+      if (isVatInclusive) {
+        vatAmount = round3(vatBase * (vatPercent / (100 + vatPercent)));
+        subtotalExVat = round3(vatBase - vatAmount);
+        grandTotal = round3(vatBase);
+      } else {
+        vatAmount = round3(vatBase * (vatPercent / 100));
+        subtotalExVat = round3(vatBase);
+        grandTotal = round3(vatBase + vatAmount);
+      }
+    } else {
+      vatAmount = 0;
+      subtotalExVat = round3(vatBase);
+      grandTotal = round3(vatBase);
+    }
+
+    const pricing = {
+      subtotal: round3(subtotal),
+      serviceChargePercent: round3(serviceChargePercent),
+      serviceChargeAmount,
+      vatPercent: round3(vatPercent),
+      vatAmount,
+      grandTotal,
+      isVatInclusive,
+      subtotalExVat,
+    };
+
+    // --------------------------------------
+    // 4) Create order (your existing orderNumber/token logic)
+    // --------------------------------------
     const baseDoc = {
       vendorId,
       branchId: branch.branchId,
-      currency: currency || branch.currency || "BHD",
+      currency: (currency || branch.currency || "BHD").toString().trim(),
       qr: qr || null,
       customer: {
         name: customer?.name || "",
         phone: customer?.phone || null,
       },
-      items,
+      items: orderItems,
       pricing,
       remarks: remarks || null,
       source,
       status: "Pending",
     };
 
-    // One counter per vendor+branch+day
     const counterKey = `orders:daily:${vendorId}:${branch.branchId}:${ymd}`;
-
     const MAX_RETRIES = 3;
     let lastErr = null;
 
     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-      // Allocate ONE atomic sequence number for this day
-      const seq = await nextSeqByKey(counterKey); // 1, 2, 3, ...
+      const seq = await nextSeqByKey(counterKey);
       const v2 = vendorDigits2(vendorId);
       const b5 = branchDigits5(branch.branchId);
       const orderNumber = `${y}${m}${d}${v2}${b5}${leftPad(seq, 7)}`;
-      const tokenNumber = seq; // <-- token == daily seq
+      const tokenNumber = seq;
 
       try {
         const created = await Order.create({
@@ -412,7 +664,6 @@ export const createOrder = async (req, res) => {
           tokenNumber,
         });
 
-        // Return detailed order payload
         return res.status(201).json({
           message: "Order placed",
           order: {
@@ -433,10 +684,9 @@ export const createOrder = async (req, res) => {
           },
         });
       } catch (e) {
-        // Rare collision protection (shouldn't happen with atomic counter, but safe)
         if (e && e.code === 11000 && e.keyPattern && e.keyPattern.orderNumber) {
           lastErr = e;
-          continue; // try again with a new seq
+          continue;
         }
         throw e;
       }
@@ -451,6 +701,113 @@ export const createOrder = async (req, res) => {
     return res.status(500).json({ error: err.message || "Server error" });
   }
 };
+
+
+
+// export const createOrder = async (req, res) => {
+//   try {
+//     const {
+//       branch: branchCode,
+//       qr,
+//       currency,
+//       customer,
+//       items,
+//       pricing, // client-provided for now
+//       remarks,
+//       source = "customer_view",
+//     } = req.body || {};
+
+//     if (!branchCode) return res.status(400).json({ error: "Missing branch" });
+//     if (!Array.isArray(items) || items.length === 0)
+//       return res.status(400).json({ error: "No items" });
+//     if (!pricing) return res.status(400).json({ error: "Missing pricing object" });
+
+//     const branch = await Branch.findOne({ branchId: branchCode }).lean();
+//     if (!branch) return res.status(404).json({ error: "Branch not found" });
+
+//     const vendorId = branch.vendorId;
+//     const tz = branch.timeZone || "UTC";
+//     const { y, m, d, ymd } = tzPartsOf(new Date(), tz);
+
+//     // Base doc shared across attempts
+//     const baseDoc = {
+//       vendorId,
+//       branchId: branch.branchId,
+//       currency: currency || branch.currency || "BHD",
+//       qr: qr || null,
+//       customer: {
+//         name: customer?.name || "",
+//         phone: customer?.phone || null,
+//       },
+//       items,
+//       pricing,
+//       remarks: remarks || null,
+//       source,
+//       status: "Pending",
+//     };
+
+//     // One counter per vendor+branch+day
+//     const counterKey = `orders:daily:${vendorId}:${branch.branchId}:${ymd}`;
+
+//     const MAX_RETRIES = 3;
+//     let lastErr = null;
+
+//     for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+//       // Allocate ONE atomic sequence number for this day
+//       const seq = await nextSeqByKey(counterKey); // 1, 2, 3, ...
+//       const v2 = vendorDigits2(vendorId);
+//       const b5 = branchDigits5(branch.branchId);
+//       const orderNumber = `${y}${m}${d}${v2}${b5}${leftPad(seq, 7)}`;
+//       const tokenNumber = seq; // <-- token == daily seq
+
+//       try {
+//         const created = await Order.create({
+//           ...baseDoc,
+//           orderNumber,
+//           tokenNumber,
+//         });
+
+//         // Return detailed order payload
+//         return res.status(201).json({
+//           message: "Order placed",
+//           order: {
+//             id: String(created._id),
+//             orderNumber: created.orderNumber,
+//             tokenNumber: created.tokenNumber,
+//             vendorId: created.vendorId,
+//             branchId: created.branchId,
+//             currency: created.currency,
+//             status: created.status,
+//             qr: created.qr,
+//             customer: created.customer,
+//             items: created.items,
+//             pricing: created.pricing,
+//             remarks: created.remarks ?? null,
+//             source: created.source ?? "customer_view",
+//             createdAt: created.createdAt,
+//           },
+//         });
+//       } catch (e) {
+//         // Rare collision protection (shouldn't happen with atomic counter, but safe)
+//         if (e && e.code === 11000 && e.keyPattern && e.keyPattern.orderNumber) {
+//           lastErr = e;
+//           continue; // try again with a new seq
+//         }
+//         throw e;
+//       }
+//     }
+
+//     return res.status(409).json({
+//       error: "Could not allocate a unique order number after retries",
+//       details: lastErr?.message || null,
+//     });
+//   } catch (err) {
+//     console.error("createOrder error:", err);
+//     return res.status(500).json({ error: err.message || "Server error" });
+//   }
+
+
+// };
 
 // ============ PROTECTED/ADMIN: list + summary ============
 /**

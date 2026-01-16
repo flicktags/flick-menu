@@ -1,6 +1,7 @@
 // src/models/Order.js
 import mongoose from "mongoose";
 
+
 const OrderSchema = new mongoose.Schema(
   {
     // Existing fields (unchanged)
@@ -38,6 +39,8 @@ const OrderSchema = new mongoose.Schema(
       vatPercent: Number,
       vatAmount: Number,
       grandTotal: Number,
+      isVatInclusive: { type: Boolean, default: false },
+      subtotalExVat: { type: Number, default: 0 }, // optional but useful for receipts
     },
     remarks: String,
     source: String, // "customer_view"
