@@ -32,7 +32,7 @@ import {
   getPublicThemeMappingAll,
 
 } from "../controllers/publicMenuController.js";
-import { createOrder, getPublicOrderById } from "../controllers/orderController.js";       // ✅ ADD
+import { createOrder, getPublicOrderById, getPublicOrderByToken } from "../controllers/orderController.js";       // ✅ ADD
 
 
 const router = express.Router();
@@ -50,6 +50,8 @@ router.get("/menu/theme-mapping", getPublicThemeMapping);       // one section
 router.get("/menu/theme-mapping/all", getPublicThemeMappingAll); // all sections
 router.post("/orders", createOrder);
 router.get("/orders/:id", getPublicOrderById);
+router.get("/orders/token/:token", getPublicOrderByToken);
+
 
 
 

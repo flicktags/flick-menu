@@ -6,7 +6,7 @@ const OrderSchema = new mongoose.Schema(
   {
     // Existing fields (unchanged)
     orderNumber: { type: String, unique: true, required: true }, // e.g. 2025101923000040000004
-    publicToken: { type: String, required: true, index: true }, // ✅ NEW
+    publicToken: { type: String, required: true, unique: true, index: true },
     branchId: { type: String, required: true },                  // BR-000004
     currency: { type: String, required: true },                  // BHD
     qr: {
@@ -63,6 +63,8 @@ OrderSchema.index({ vendorId: 1, branchId: 1, createdAt: -1 });
 OrderSchema.index({ branchId: 1, createdAt: -1 });
 OrderSchema.index({ status: 1, createdAt: -1 });
 OrderSchema.index({ tokenNumber: 1, createdAt: -1 });
+OrderSchema.index({ publicToken: 1 }, { unique: true });
+
 
 export default mongoose.model("Order", OrderSchema);
 

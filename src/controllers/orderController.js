@@ -781,6 +781,62 @@ export const getPublicOrderById = async (req, res) => {
   }
 };
 
+// ============ PUBLIC: get order details by publicToken ============
+export const getPublicOrderByToken = async (req, res) => {
+  try {
+    const token = String(req.params.token || "").trim();
+
+    // optional context guards (recommended)
+    const branchId = String(req.query.branchId || "").trim();
+    const qrId = String(req.query.qrId || "").trim();
+
+    if (!token) return res.status(400).json({ error: "Missing token" });
+
+    const order = await Order.findOne({ publicToken: token }).lean();
+    if (!order) return res.status(404).json({ error: "Order not found" });
+
+    // ✅ optional protection: ensure the token is used ONLY in same branch/table context
+    if (branchId && String(order.branchId || "") !== branchId) {
+      return res.status(404).json({ error: "Order not found" });
+    }
+    if (qrId && String(order?.qr?.qrId || "") !== qrId) {
+      return res.status(404).json({ error: "Order not found" });
+    }
+
+    return res.status(200).json({
+      message: "OK",
+      order: {
+        id: String(order._id),
+        orderNumber: order.orderNumber,
+        tokenNumber: order.tokenNumber,
+        publicToken: order.publicToken,
+
+        vendorId: order.vendorId,
+        branchId: order.branchId,
+        currency: order.currency,
+        status: order.status,
+
+        qr: order.qr || null,
+        customer: order.customer || null,
+        items: order.items || [],
+        pricing: order.pricing || null,
+
+        remarks: order.remarks ?? null,
+        source: order.source ?? "customer_view",
+
+        placedAt: order.placedAt ?? null,
+        createdAt: order.createdAt ?? null,
+        clientCreatedAt: order.clientCreatedAt ?? null,
+        clientTzOffsetMinutes: order.clientTzOffsetMinutes ?? null,
+      },
+    });
+  } catch (err) {
+    console.error("getPublicOrderByToken error:", err);
+    return res.status(500).json({ error: err.message || "Server error" });
+  }
+};
+
+
 
 // export const createOrder = async (req, res) => {
 //   try {
