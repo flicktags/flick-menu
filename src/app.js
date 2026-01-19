@@ -15,6 +15,8 @@ import themeMappingRoutes from "./routes/themeMappingRoutes.js";
 import vendorCustomMenuTypesRoutes from "./routes/vendorCustomMenuTypesRoutes.js";
 import onboardingRoutes from "./routes/onboardingRoutes.js";
 import dashboardRoutes from "./routes/dashboardRoutes.js";
+import kdsRoutes from "./routes/kdsRoutes.js";
+
 
 
 
@@ -45,6 +47,8 @@ app.use("/api/vendor", themeMappingRoutes);
 app.use("/api/vendor", vendorCustomMenuTypesRoutes);
 app.use("/api/onboarding", onboardingRoutes);
 app.use("/api/dashboard", dashboardRoutes);
+app.use("/api/kds", kdsRoutes);
+
 
 
 

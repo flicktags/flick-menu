@@ -64,6 +64,9 @@ OrderSchema.index({ branchId: 1, createdAt: -1 });
 OrderSchema.index({ status: 1, createdAt: -1 });
 OrderSchema.index({ tokenNumber: 1, createdAt: -1 });
 OrderSchema.index({ publicToken: 1 }, { unique: true });
+OrderSchema.index({ branchId: 1, placedAt: -1, status: 1 });
+OrderSchema.index({ branchId: 1, createdAt: -1, status: 1 });
+
 
 
 export default mongoose.model("Order", OrderSchema);
