@@ -53,6 +53,9 @@ const OrderSchema = new mongoose.Schema(
     tokenNumber: { type: Number, index: true },              // small per-day token shown to customer
     clientCreatedAt: { type: Date, default: null, index: true }, // parsed from ISO sent by client
     clientTzOffsetMinutes: { type: Number, default: null }, 
+
+    readyAt: { type: Date, default: null, index: true },  // set when status becomes "Ready"
+    servedAt: { type: Date, default: null, index: true }, // set when status becomes "Served"
   },
   { timestamps: true }
 );
