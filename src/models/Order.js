@@ -13,6 +13,8 @@ const OrderSchema = new mongoose.Schema(
       type: { type: String },   // "table" | "room" (or similar)
       number: { type: String }, // e.g. "table-1"
       qrId: { type: String },
+      label: { type: String },
+
     },
     customer: {
       name: { type: String },
