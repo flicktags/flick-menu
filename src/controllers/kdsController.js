@@ -211,21 +211,55 @@ export const getKdsOverview = async (req, res) => {
  * PATCH /api/kds/orders/:id/status
  * Body: { status: "Accepted" | "Completed" | "Cancelled" }
  */
+
 export const updateKdsOrderStatus = async (req, res) => {
   try {
     const id = String(req.params.id || "").trim();
-    const nextStatus = String(req.body?.status || "").trim();
+    const incoming = String(req.body?.status || "").trim(); // can be code or label
 
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ error: "Invalid order id" });
     }
-    if (!nextStatus) return res.status(400).json({ error: "Missing status" });
+    if (!incoming) return res.status(400).json({ error: "Missing status" });
 
-    // Optional branch guard: require branchId in body/query and match the order
+    // Optional branch guard
     const branchId = String(req.body?.branchId || req.query.branchId || "").trim();
 
-    const allowed = new Set(["Pending", "Accepted", "Completed", "Cancelled"]);
-    if (!allowed.has(nextStatus)) {
+    // ✅ Accept both CODE and LABEL
+    const STATUS_CODE_TO_LABEL = {
+      PENDING: "Pending",
+      ACCEPTED: "Accepted",
+      PREPARING: "Preparing",
+      READY: "Ready",
+      SERVED: "Served",
+      COMPLETED: "Completed",
+      CANCELLED: "Cancelled",
+      REJECTED: "Rejected",
+    };
+
+    // helper: normalize string to CODE (e.g. "In Progress" -> "IN_PROGRESS")
+    const toCode = (s) =>
+      String(s || "")
+        .trim()
+        .toUpperCase()
+        .replace(/\s+/g, "_");
+
+    // helper: normalize string to LABEL (Title Case based on lookup)
+    const toLabel = (s) => {
+      const code = toCode(s);
+      // if user sent a code
+      if (STATUS_CODE_TO_LABEL[code]) return STATUS_CODE_TO_LABEL[code];
+
+      // if user sent a label like "Preparing"
+      // try matching by label values:
+      const found = Object.values(STATUS_CODE_TO_LABEL).find(
+        (lbl) => toCode(lbl) === code
+      );
+      return found || null;
+    };
+
+    const nextStatusLabel = toLabel(incoming);
+    if (!nextStatusLabel) {
       return res.status(400).json({ error: "Invalid status value" });
     }
 
@@ -236,16 +270,17 @@ export const updateKdsOrderStatus = async (req, res) => {
       return res.status(403).json({ error: "Branch mismatch" });
     }
 
-    // Basic transition protection (real-world)
-    const current = normalizeStatus(order.status);
-    const target = normalizeStatus(nextStatus);
+    // ✅ Transition protection
+    const current = normalizeStatus(order.status); // your existing helper
+    const target = normalizeStatus(nextStatusLabel);
 
-    const closed = new Set(["completed", "cancelled", "canceled", "paid", "closed", "delivered"]);
+    const closed = new Set(["completed", "cancelled", "canceled", "paid", "closed", "delivered", "rejected"]);
     if (closed.has(current) && current !== target) {
       return res.status(409).json({ error: "Order already closed" });
     }
 
-    order.status = nextStatus;
+    // ✅ Save label (keeps compatibility with existing overview filters)
+    order.status = nextStatusLabel;
     await order.save();
 
     return res.status(200).json({
@@ -261,3 +296,58 @@ export const updateKdsOrderStatus = async (req, res) => {
     return res.status(500).json({ error: err.message || "Server error" });
   }
 };
+
+
+// export const updateKdsOrderStatus = async (req, res) => {
+//   try {
+//     const id = String(req.params.id || "").trim();
+//     const nextStatus = String(req.body?.status || "").trim();
+
+//     if (!mongoose.Types.ObjectId.isValid(id)) {
+//       return res.status(400).json({ error: "Invalid order id" });
+//     }
+//     if (!nextStatus) return res.status(400).json({ error: "Missing status" });
+
+//     // Optional branch guard: require branchId in body/query and match the order
+//     const branchId = String(req.body?.branchId || req.query.branchId || "").trim();
+
+//     const allowed = new Set(["Pending", "Accepted", "Completed", "Cancelled"]);
+//     if (!allowed.has(nextStatus)) {
+//       return res.status(400).json({ error: "Invalid status value" });
+//     }
+
+//     const order = await Order.findById(id);
+//     if (!order) return res.status(404).json({ error: "Order not found" });
+
+//     if (branchId && String(order.branchId || "") !== branchId) {
+//       return res.status(403).json({ error: "Branch mismatch" });
+//     }
+
+//     // Basic transition protection (real-world)
+//     const current = normalizeStatus(order.status);
+//     const target = normalizeStatus(nextStatus);
+
+//     const closed = new Set(["completed", "cancelled", "canceled", "paid", "closed", "delivered"]);
+//     if (closed.has(current) && current !== target) {
+//       return res.status(409).json({ error: "Order already closed" });
+//     }
+
+//     order.status = nextStatus;
+//     await order.save();
+
+//     return res.status(200).json({
+//       message: "Status updated",
+//       order: {
+//         id: String(order._id),
+//         status: order.status,
+//         updatedAt: order.updatedAt ?? null,
+//       },
+//     });
+//   } catch (err) {
+//     console.error("updateKdsOrderStatus error:", err);
+//     return res.status(500).json({ error: err.message || "Server error" });
+//   }
+
+
+
+// };
