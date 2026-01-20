@@ -3,6 +3,8 @@ import { DateTime } from "luxon";
 import mongoose from "mongoose";
 import Branch from "../models/Branch.js";
 import Order from "../models/Order.js";
+import Qr from "../models/QrCodeOrders.js"; // ✅ or whatever your QR model file is called
+
 
 const DAY_KEYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
@@ -147,6 +149,7 @@ function canTransition(currentLabel, nextLabel) {
 /**
  * GET /api/kds/overview?branchId=BR-000004
  */
+
 export const getKdsOverview = async (req, res) => {
   try {
     const branchId = String(req.query.branchId || "").trim();
@@ -171,11 +174,9 @@ export const getKdsOverview = async (req, res) => {
     };
 
     // ✅ AUTO SERVE: READY -> SERVED after 60s
-    // Works because KDS polls this endpoint regularly.
     const now = new Date();
     const cutoff = new Date(now.getTime() - 60 * 1000);
 
-    // Only within this branch + shift window
     await Order.updateMany(
       {
         branchId,
@@ -196,12 +197,50 @@ export const getKdsOverview = async (req, res) => {
       .limit(500)
       .lean();
 
+    // ✅ Build qrMap from QR collection (qrId -> {label,type,number})
+    const qrIds = [
+      ...new Set(
+        orders
+          .map((o) => o?.qr?.qrId)
+          .filter(Boolean)
+          .map(String)
+      ),
+    ];
+
+    let qrMap = {};
+    if (qrIds.length) {
+      const qrs = await Qr.find(
+        { qrId: { $in: qrIds } },
+        { qrId: 1, label: 1, type: 1, number: 1 }
+      ).lean();
+
+      qrMap = qrs.reduce((acc, q) => {
+        acc[String(q.qrId)] = q;
+        return acc;
+      }, {});
+    }
+
     const active = [];
     const completed = [];
     const cancelled = [];
 
     for (const o of orders) {
       const bucket = classifyStatus(o.status);
+
+      // ✅ Enrich QR (add label even if order.qr.label is missing)
+      const qr = o.qr || null;
+      const qid = qr?.qrId ? String(qr.qrId) : "";
+      const qrDoc = qid ? qrMap[qid] : null;
+
+      const enrichedQr = qr
+        ? {
+            ...qr,
+            label: qr.label ?? (qrDoc ? qrDoc.label : null),
+            type: qr.type ?? (qrDoc ? qrDoc.type : null),
+            number: qr.number ?? (qrDoc ? qrDoc.number : null),
+          }
+        : null;
+
       const mapped = {
         id: String(o._id),
         orderNumber: o.orderNumber,
@@ -210,14 +249,12 @@ export const getKdsOverview = async (req, res) => {
         branchId: o.branchId,
         currency: o.currency,
         pricing: o.pricing || null,
-        qr: o.qr || null,
+        qr: enrichedQr, // ✅ THIS is the fix
         customer: o.customer || null,
         items: o.items || [],
         placedAt: o.placedAt ?? null,
         createdAt: o.createdAt ?? null,
         updatedAt: o.updatedAt ?? null,
-
-        // optional useful fields
         readyAt: o.readyAt ?? null,
         servedAt: o.servedAt ?? null,
       };
@@ -249,6 +286,130 @@ export const getKdsOverview = async (req, res) => {
     return res.status(500).json({ error: err.message || "Server error" });
   }
 };
+// export const getKdsOverview = async (req, res) => {
+//   try {
+//     const branchId = String(req.query.branchId || "").trim();
+//     if (!branchId) return res.status(400).json({ error: "Missing branchId" });
+
+//     const branch = await Branch.findOne({ branchId }).lean();
+//     if (!branch) return res.status(404).json({ error: "Branch not found" });
+
+//     const tz = String(branch.timeZone || req.query.tz || "Asia/Bahrain").trim();
+//     const openingHours = branch.openingHours || {};
+
+//     const { startTz, endTz, label } = resolveCurrentShiftWindow({ openingHours, tz });
+
+//     const fromUtc = startTz.toUTC().toJSDate();
+//     const toUtc = endTz.toUTC().toJSDate();
+
+//     const timeQuery = {
+//       $or: [
+//         { placedAt: { $gte: fromUtc, $lt: toUtc } },
+//         { createdAt: { $gte: fromUtc, $lt: toUtc } },
+//       ],
+//     };
+
+//     // ✅ AUTO SERVE: READY -> SERVED after 60s
+//     // Works because KDS polls this endpoint regularly.
+//     const now = new Date();
+//     const cutoff = new Date(now.getTime() - 60 * 1000);
+
+//     // Only within this branch + shift window
+//     await Order.updateMany(
+//       {
+//         branchId,
+//         ...timeQuery,
+//         status: "Ready",
+//         readyAt: { $exists: true, $lte: cutoff },
+//       },
+//       {
+//         $set: { status: "Served", servedAt: now },
+//       }
+//     );
+
+//     const orders = await Order.find({
+//       branchId,
+//       ...timeQuery,
+//     })
+//       .sort({ createdAt: -1 })
+//       .limit(500)
+//       .lean();
+    
+//     const qrIds = [
+//   ...new Set(
+//     orders
+//       .map((o) => o?.qr?.qrId)
+//       .filter(Boolean)
+//       .map(String)
+//   ),
+// ];
+
+// let qrMap = {};
+// if (qrIds.length) {
+//   const qrs = await Qr.find(
+//     { qrId: { $in: qrIds } },
+//     { qrId: 1, label: 1, type: 1, number: 1 }
+//   ).lean();
+
+//   qrMap = qrs.reduce((acc, q) => {
+//     acc[String(q.qrId)] = q;
+//     return acc;
+//   }, {});
+// }
+
+//     const active = [];
+//     const completed = [];
+//     const cancelled = [];
+
+//     for (const o of orders) {
+//       const bucket = classifyStatus(o.status);
+//       const mapped = {
+//         id: String(o._id),
+//         orderNumber: o.orderNumber,
+//         tokenNumber: o.tokenNumber ?? null,
+//         status: o.status || "Pending",
+//         branchId: o.branchId,
+//         currency: o.currency,
+//         pricing: o.pricing || null,
+//         qr: o.qr || null,
+//         customer: o.customer || null,
+//         items: o.items || [],
+//         placedAt: o.placedAt ?? null,
+//         createdAt: o.createdAt ?? null,
+//         updatedAt: o.updatedAt ?? null,
+
+//         // optional useful fields
+//         readyAt: o.readyAt ?? null,
+//         servedAt: o.servedAt ?? null,
+//       };
+
+//       if (bucket === "active") active.push(mapped);
+//       else if (bucket === "completed") completed.push(mapped);
+//       else cancelled.push(mapped);
+//     }
+
+//     return res.status(200).json({
+//       shift: {
+//         tz,
+//         from: startTz.toISO(),
+//         to: endTz.toISO(),
+//         label,
+//       },
+//       counts: {
+//         active: active.length,
+//         completed: completed.length,
+//         cancelled: cancelled.length,
+//         total: orders.length,
+//       },
+//       active,
+//       completed,
+//       cancelled,
+//     });
+//   } catch (err) {
+//     console.error("getKdsOverview error:", err);
+//     return res.status(500).json({ error: err.message || "Server error" });
+//   }
+// };
 
 /**
  * PATCH /api/kds/orders/:id/status
