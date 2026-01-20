@@ -133,7 +133,7 @@ function canTransition(currentLabel, nextLabel) {
 
   // Define allowed moves
   const rules = {
-    PENDING: new Set(["ACCEPTED", "REJECTED", "CANCELLED"]),
+    PENDING: new Set(["PREPARING", "REJECTED", "CANCELLED"]),
     ACCEPTED: new Set(["PREPARING", "CANCELLED"]),
     PREPARING: new Set(["READY", "CANCELLED"]),
     READY: new Set(["SERVED"]), // you can keep manual serve allowed, but mostly auto
