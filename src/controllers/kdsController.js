@@ -150,6 +150,7 @@ function canTransition(currentLabel, nextLabel) {
  * GET /api/kds/overview?branchId=BR-000004
  */
 
+
 export const getKdsOverview = async (req, res) => {
   try {
     const branchId = String(req.query.branchId || "").trim();
@@ -173,21 +174,24 @@ export const getKdsOverview = async (req, res) => {
       ],
     };
 
-    // ✅ AUTO SERVE: READY -> SERVED after 60s
+    // ✅ AUTO SERVE: READY -> SERVED after 60s (and bump revision)
     const now = new Date();
     const cutoff = new Date(now.getTime() - 60 * 1000);
 
     await Order.updateMany(
-      {
-        branchId,
-        ...timeQuery,
-        status: "Ready",
-        readyAt: { $exists: true, $lte: cutoff },
-      },
-      {
-        $set: { status: "Served", servedAt: now },
-      }
+    {
+      branchId,
+      ...timeQuery,
+      status: "Ready",
+      readyAt: { $exists: true, $ne: null, $lte: cutoff },
+      $expr: { $eq: ["$readyAtCycle", "$kitchenCycle"] }, // ✅ only serve current cycle
+    },
+    {
+    $set: { status: "Served", servedAt: now },
+    $inc: { revision: 1 },
+    }
     );
+
 
     const orders = await Order.find({
       branchId,
@@ -249,7 +253,7 @@ export const getKdsOverview = async (req, res) => {
         branchId: o.branchId,
         currency: o.currency,
         pricing: o.pricing || null,
-        qr: enrichedQr, // ✅ THIS is the fix
+        qr: enrichedQr,
         customer: o.customer || null,
         items: o.items || [],
         placedAt: o.placedAt ?? null,
@@ -257,6 +261,10 @@ export const getKdsOverview = async (req, res) => {
         updatedAt: o.updatedAt ?? null,
         readyAt: o.readyAt ?? null,
         servedAt: o.servedAt ?? null,
+
+        // ✅ NEW (important for add-more / re-open flow)
+        revision: o.revision ?? 0,
+        kitchenCycle: o.kitchenCycle ?? 1,
       };
 
       if (bucket === "active") active.push(mapped);
@@ -286,6 +294,145 @@ export const getKdsOverview = async (req, res) => {
     return res.status(500).json({ error: err.message || "Server error" });
   }
 };
+
+
+
+// export const getKdsOverview = async (req, res) => {
+//   try {
+//     const branchId = String(req.query.branchId || "").trim();
+//     if (!branchId) return res.status(400).json({ error: "Missing branchId" });
+
+//     const branch = await Branch.findOne({ branchId }).lean();
+//     if (!branch) return res.status(404).json({ error: "Branch not found" });
+
+//     const tz = String(branch.timeZone || req.query.tz || "Asia/Bahrain").trim();
+//     const openingHours = branch.openingHours || {};
+
+//     const { startTz, endTz, label } = resolveCurrentShiftWindow({ openingHours, tz });
+
+//     const fromUtc = startTz.toUTC().toJSDate();
+//     const toUtc = endTz.toUTC().toJSDate();
+
+//     const timeQuery = {
+//       $or: [
+//         { placedAt: { $gte: fromUtc, $lt: toUtc } },
+//         { createdAt: { $gte: fromUtc, $lt: toUtc } },
+//       ],
+//     };
+
+//     // ✅ AUTO SERVE: READY -> SERVED after 60s
+//     const now = new Date();
+//     const cutoff = new Date(now.getTime() - 60 * 1000);
+
+//     await Order.updateMany(
+//       {
+//         branchId,
+//         ...timeQuery,
+//         status: "Ready",
+//         readyAt: { $exists: true, $lte: cutoff },
+//       },
+//       {
+//         $set: { status: "Served", servedAt: now },
+//       }
+//     );
+
+//     const orders = await Order.find({
+//       branchId,
+//       ...timeQuery,
+//     })
+//       .sort({ createdAt: -1 })
+//       .limit(500)
+//       .lean();
+
+//     // ✅ Build qrMap from QR collection (qrId -> {label,type,number})
+//     const qrIds = [
+//       ...new Set(
+//         orders
+//           .map((o) => o?.qr?.qrId)
+//           .filter(Boolean)
+//           .map(String)
+//       ),
+//     ];
+
+//     let qrMap = {};
+//     if (qrIds.length) {
+//       const qrs = await Qr.find(
+//         { qrId: { $in: qrIds } },
+//         { qrId: 1, label: 1, type: 1, number: 1 }
+//       ).lean();
+
+//       qrMap = qrs.reduce((acc, q) => {
+//         acc[String(q.qrId)] = q;
+//         return acc;
+//       }, {});
+//     }
+
+//     const active = [];
+//     const completed = [];
+//     const cancelled = [];
+
+//     for (const o of orders) {
+//       const bucket = classifyStatus(o.status);
+
+//       // ✅ Enrich QR (add label even if order.qr.label is missing)
+//       const qr = o.qr || null;
+//       const qid = qr?.qrId ? String(qr.qrId) : "";
+//       const qrDoc = qid ? qrMap[qid] : null;
+
+//       const enrichedQr = qr
+//         ? {
+//             ...qr,
+//             label: qr.label ?? (qrDoc ? qrDoc.label : null),
+//             type: qr.type ?? (qrDoc ? qrDoc.type : null),
+//             number: qr.number ?? (qrDoc ? qrDoc.number : null),
+//           }
+//         : null;
+
+//       const mapped = {
+//         id: String(o._id),
+//         orderNumber: o.orderNumber,
+//         tokenNumber: o.tokenNumber ?? null,
+//         status: o.status || "Pending",
+//         branchId: o.branchId,
+//         currency: o.currency,
+//         pricing: o.pricing || null,
+//         qr: enrichedQr, // ✅ THIS is the fix
+//         customer: o.customer || null,
+//         items: o.items || [],
+//         placedAt: o.placedAt ?? null,
+//         createdAt: o.createdAt ?? null,
+//         updatedAt: o.updatedAt ?? null,
+//         readyAt: o.readyAt ?? null,
+//         servedAt: o.servedAt ?? null,
+//       };
+
+//       if (bucket === "active") active.push(mapped);
+//       else if (bucket === "completed") completed.push(mapped);
+//       else cancelled.push(mapped);
+//     }
+
+//     return res.status(200).json({
+//       shift: {
+//         tz,
+//         from: startTz.toISO(),
+//         to: endTz.toISO(),
+//         label,
+//       },
+//       counts: {
+//         active: active.length,
+//         completed: completed.length,
+//         cancelled: cancelled.length,
+//         total: orders.length,
+//       },
+//       active,
+//       completed,
+//       cancelled,
+//     });
+//   } catch (err) {
+//     console.error("getKdsOverview error:", err);
+//     return res.status(500).json({ error: err.message || "Server error" });
+//   }
+// };
 // export const getKdsOverview = async (req, res) => {
 //   try {
 //     const branchId = String(req.query.branchId || "").trim();
@@ -415,6 +562,7 @@ export const getKdsOverview = async (req, res) => {
  * PATCH /api/kds/orders/:id/status
  * Body: { status: "READY" | "Ready" | "Preparing" ... , branchId? }
  */
+
 export const updateKdsOrderStatus = async (req, res) => {
   try {
     const id = String(req.params.id || "").trim();
@@ -441,7 +589,10 @@ export const updateKdsOrderStatus = async (req, res) => {
 
     const currentLabel = String(order.status || "Pending").trim();
 
-    // ✅ transition rules
+    // ✅ transition rules (MUST allow PENDING -> PREPARING)
+    // Ensure your canTransition supports this.
+    // Example rule tweak:
+    // PENDING: ["PREPARING","REJECTED","CANCELLED"]
     if (!canTransition(currentLabel, nextStatusLabel)) {
       return res.status(409).json({
         error: "Invalid status transition",
@@ -450,20 +601,46 @@ export const updateKdsOrderStatus = async (req, res) => {
       });
     }
 
-    // ✅ If moving to READY, stamp readyAt
     const nextCode = toCode(nextStatusLabel);
     const now = new Date();
 
+    // ensure fields exist (safe)
+    order.revision = Number(order.revision || 0) || 0;
+    order.kitchenCycle = Number(order.kitchenCycle || 1) || 1;
+    order.servedHistory = Array.isArray(order.servedHistory) ? order.servedHistory : [];
+
+    const prevLabel = String(order.status || "").trim();
+
+    // ✅ apply status
     order.status = nextStatusLabel;
 
+    // ✅ stamp/clear timestamps by status
+    if (nextCode === "PREPARING") {
+      // reopen/ensure clean kitchen state
+      order.readyAt = null;
+      order.servedAt = null;
+    }
+
     if (nextCode === "READY") {
-      // Only set if not already set
-      if (!order.readyAt) order.readyAt = now;
+       order.readyAt = now;
+       order.readyAtCycle = order.kitchenCycle || 1; // ✅ tie ready time to current cycle
+       order.servedAt = null;
     }
 
     if (nextCode === "SERVED") {
-      if (!order.servedAt) order.servedAt = now;
+      order.servedAt = now;
+
+      // optional history entry
+      order.servedHistory.push({
+        kitchenCycle: order.kitchenCycle,
+        servedAt: now,
+        readyAt: order.readyAt ?? null,
+        fromStatus: prevLabel || null,
+      });
     }
+
+    // ✅ bump revision when KDS changes status
+    order.revision += 1;
 
     await order.save();
 
@@ -472,6 +649,8 @@ export const updateKdsOrderStatus = async (req, res) => {
       order: {
         id: String(order._id),
         status: order.status,
+        revision: order.revision ?? 0,
+        kitchenCycle: order.kitchenCycle ?? 1,
         readyAt: order.readyAt ?? null,
         servedAt: order.servedAt ?? null,
         updatedAt: order.updatedAt ?? null,
@@ -482,6 +661,74 @@ export const updateKdsOrderStatus = async (req, res) => {
     return res.status(500).json({ error: err.message || "Server error" });
   }
 };
+
+// export const updateKdsOrderStatus = async (req, res) => {
+//   try {
+//     const id = String(req.params.id || "").trim();
+//     const incoming = String(req.body?.status || "").trim();
+
+//     if (!mongoose.Types.ObjectId.isValid(id)) {
+//       return res.status(400).json({ error: "Invalid order id" });
+//     }
+//     if (!incoming) return res.status(400).json({ error: "Missing status" });
+
+//     const branchId = String(req.body?.branchId || req.query.branchId || "").trim();
+
+//     const nextStatusLabel = toLabel(incoming);
+//     if (!nextStatusLabel) {
+//       return res.status(400).json({ error: "Invalid status value" });
+//     }
+
+//     const order = await Order.findById(id);
+//     if (!order) return res.status(404).json({ error: "Order not found" });
+
+//     if (branchId && String(order.branchId || "") !== branchId) {
+//       return res.status(403).json({ error: "Branch mismatch" });
+//     }
+
+//     const currentLabel = String(order.status || "Pending").trim();
+
+//     // ✅ transition rules
+//     if (!canTransition(currentLabel, nextStatusLabel)) {
+//       return res.status(409).json({
+//         error: "Invalid status transition",
+//         from: currentLabel,
+//         to: nextStatusLabel,
+//       });
+//     }
+
+//     // ✅ If moving to READY, stamp readyAt
+//     const nextCode = toCode(nextStatusLabel);
+//     const now = new Date();
+
+//     order.status = nextStatusLabel;
+
+//     if (nextCode === "READY") {
+//       // Only set if not already set
+//       if (!order.readyAt) order.readyAt = now;
+//     }
+
+//     if (nextCode === "SERVED") {
+//       if (!order.servedAt) order.servedAt = now;
+//     }
+
+//     await order.save();
+
+//     return res.status(200).json({
+//       message: "Status updated",
+//       order: {
+//         id: String(order._id),
+//         status: order.status,
+//         readyAt: order.readyAt ?? null,
+//         servedAt: order.servedAt ?? null,
+//         updatedAt: order.updatedAt ?? null,
+//       },
+//     });
+//   } catch (err) {
+//     console.error("updateKdsOrderStatus error:", err);
+//     return res.status(500).json({ error: err.message || "Server error" });
+//   }
+// };
 
 
 // // src/controllers/kdsController.js
