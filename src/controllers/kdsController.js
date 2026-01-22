@@ -567,18 +567,12 @@ export const updateKdsOrderStatus = async (req, res) => {
   try {
     const id = String(req.params.id || "").trim();
     const incoming = String(req.body?.status || "").trim();
-
-    if (!mongoose.Types.ObjectId.isValid(id)) {
-      return res.status(400).json({ error: "Invalid order id" });
-    }
+    if (!mongoose.Types.ObjectId.isValid(id)) return res.status(400).json({ error: "Invalid order id" });
     if (!incoming) return res.status(400).json({ error: "Missing status" });
 
     const branchId = String(req.body?.branchId || req.query.branchId || "").trim();
-
     const nextStatusLabel = toLabel(incoming);
-    if (!nextStatusLabel) {
-      return res.status(400).json({ error: "Invalid status value" });
-    }
+    if (!nextStatusLabel) return res.status(400).json({ error: "Invalid status value" });
 
     const order = await Order.findById(id);
     if (!order) return res.status(404).json({ error: "Order not found" });
@@ -587,60 +581,93 @@ export const updateKdsOrderStatus = async (req, res) => {
       return res.status(403).json({ error: "Branch mismatch" });
     }
 
-    const currentLabel = String(order.status || "Pending").trim();
-
-    // ✅ transition rules (MUST allow PENDING -> PREPARING)
-    // Ensure your canTransition supports this.
-    // Example rule tweak:
-    // PENDING: ["PREPARING","REJECTED","CANCELLED"]
-    if (!canTransition(currentLabel, nextStatusLabel)) {
-      return res.status(409).json({
-        error: "Invalid status transition",
-        from: currentLabel,
-        to: nextStatusLabel,
-      });
-    }
-
-    const nextCode = toCode(nextStatusLabel);
-    const now = new Date();
-
-    // ensure fields exist (safe)
-    order.revision = Number(order.revision || 0) || 0;
+    // ensure exists
     order.kitchenCycle = Number(order.kitchenCycle || 1) || 1;
+    order.kitchenCycles = Array.isArray(order.kitchenCycles) ? order.kitchenCycles : [];
+    order.revision = Number(order.revision || 0) || 0;
     order.servedHistory = Array.isArray(order.servedHistory) ? order.servedHistory : [];
 
-    const prevLabel = String(order.status || "").trim();
+    const now = new Date();
+    const nextCode = toCode(nextStatusLabel);
 
-    // ✅ apply status
-    order.status = nextStatusLabel;
+    // find current cycle
+    const currentCycleNumber = order.kitchenCycle;
+    const idx = order.kitchenCycles.findIndex((c) => Number(c.cycle) === Number(currentCycleNumber));
+    if (idx === -1) {
+      return res.status(409).json({ error: "Current kitchen cycle not found", kitchenCycle: currentCycleNumber });
+    }
 
-    // ✅ stamp/clear timestamps by status
+    const cycle = order.kitchenCycles[idx];
+    const prevCycleStatus = toLabel(cycle.status);
+
+    // ✅ update cycle status
+    cycle.status = nextCode;
+    cycle.updatedAt = now;
+
+    // ✅ update timestamps and item kitchenStatus in this cycle
     if (nextCode === "PREPARING") {
-      // reopen/ensure clean kitchen state
-      order.readyAt = null;
-      order.servedAt = null;
+      cycle.readyAt = null;
+      cycle.servedAt = null;
+
+      for (const it of (cycle.items || [])) {
+        it.kitchenStatus = "PREPARING";
+        it.readyAt = null;
+        it.servedAt = null;
+      }
     }
 
     if (nextCode === "READY") {
-       order.readyAt = now;
-       order.readyAtCycle = order.kitchenCycle || 1; // ✅ tie ready time to current cycle
-       order.servedAt = null;
+      cycle.readyAt = now;
+      cycle.servedAt = null;
+
+      for (const it of (cycle.items || [])) {
+        it.kitchenStatus = "READY";
+        it.readyAt = now;
+        it.servedAt = null;
+      }
     }
 
     if (nextCode === "SERVED") {
-      order.servedAt = now;
+      cycle.servedAt = now;
 
-      // optional history entry
+      for (const it of (cycle.items || [])) {
+        it.kitchenStatus = "SERVED";
+        it.servedAt = now;
+      }
+
+      // audit
       order.servedHistory.push({
-        kitchenCycle: order.kitchenCycle,
+        kitchenCycle: currentCycleNumber,
         servedAt: now,
-        readyAt: order.readyAt ?? null,
-        fromStatus: prevLabel || null,
+        readyAt: cycle.readyAt ?? null,
+        fromStatus: prevCycleStatus || null,
       });
     }
 
-    // ✅ bump revision when KDS changes status
+    // ✅ recompute overall status from cycles
+    order.status = computeOverallStatusFromCycles(order.kitchenCycles);
+
+    // Optional overall timestamps:
+    // - overall readyAt = latest cycle readyAt when overall becomes Ready
+    // - overall servedAt = now only if ALL cycles served
+    const allCodes = order.kitchenCycles.map((c) => toCode(c.status));
+    if (order.status === "Ready") {
+      // pick current cycle readyAt
+      order.readyAt = cycle.readyAt ?? now;
+      order.servedAt = null;
+    } else if (allCodes.length > 0 && allCodes.every((x) => x === "SERVED")) {
+      order.servedAt = now;
+    } else {
+      // keep these clean if not meaningful
+      if (order.status !== "Ready") order.readyAt = null;
+      if (order.status !== "Served") order.servedAt = null;
+    }
+
+    // ✅ bump revision for KDS action
     order.revision += 1;
+
+    // ✅ keep legacy items synced (flatten cycles)
+    order.items = flattenCyclesToLegacyItems(order.kitchenCycles);
 
     await order.save();
 
@@ -651,6 +678,7 @@ export const updateKdsOrderStatus = async (req, res) => {
         status: order.status,
         revision: order.revision ?? 0,
         kitchenCycle: order.kitchenCycle ?? 1,
+        kitchenCycles: order.kitchenCycles ?? [],
         readyAt: order.readyAt ?? null,
         servedAt: order.servedAt ?? null,
         updatedAt: order.updatedAt ?? null,
@@ -661,6 +689,105 @@ export const updateKdsOrderStatus = async (req, res) => {
     return res.status(500).json({ error: err.message || "Server error" });
   }
 };
+
+// export const updateKdsOrderStatus = async (req, res) => {
+//   try {
+//     const id = String(req.params.id || "").trim();
+//     const incoming = String(req.body?.status || "").trim();
+
+//     if (!mongoose.Types.ObjectId.isValid(id)) {
+//       return res.status(400).json({ error: "Invalid order id" });
+//     }
+//     if (!incoming) return res.status(400).json({ error: "Missing status" });
+
+//     const branchId = String(req.body?.branchId || req.query.branchId || "").trim();
+
+//     const nextStatusLabel = toLabel(incoming);
+//     if (!nextStatusLabel) {
+//       return res.status(400).json({ error: "Invalid status value" });
+//     }
+
+//     const order = await Order.findById(id);
+//     if (!order) return res.status(404).json({ error: "Order not found" });
+
+//     if (branchId && String(order.branchId || "") !== branchId) {
+//       return res.status(403).json({ error: "Branch mismatch" });
+//     }
+
+//     const currentLabel = String(order.status || "Pending").trim();
+
+//     // ✅ transition rules (MUST allow PENDING -> PREPARING)
+//     // Ensure your canTransition supports this.
+//     // Example rule tweak:
+//     // PENDING: ["PREPARING","REJECTED","CANCELLED"]
+//     if (!canTransition(currentLabel, nextStatusLabel)) {
+//       return res.status(409).json({
+//         error: "Invalid status transition",
+//         from: currentLabel,
+//         to: nextStatusLabel,
+//       });
+//     }
+
+//     const nextCode = toCode(nextStatusLabel);
+//     const now = new Date();
+
+//     // ensure fields exist (safe)
+//     order.revision = Number(order.revision || 0) || 0;
+//     order.kitchenCycle = Number(order.kitchenCycle || 1) || 1;
+//     order.servedHistory = Array.isArray(order.servedHistory) ? order.servedHistory : [];
+
+//     const prevLabel = String(order.status || "").trim();
+
+//     // ✅ apply status
+//     order.status = nextStatusLabel;
+
+//     // ✅ stamp/clear timestamps by status
+//     if (nextCode === "PREPARING") {
+//       // reopen/ensure clean kitchen state
+//       order.readyAt = null;
+//       order.servedAt = null;
+//     }
+
+//     if (nextCode === "READY") {
+//        order.readyAt = now;
+//        order.readyAtCycle = order.kitchenCycle || 1; // ✅ tie ready time to current cycle
+//        order.servedAt = null;
+//     }
+
+//     if (nextCode === "SERVED") {
+//       order.servedAt = now;
+
+//       // optional history entry
+//       order.servedHistory.push({
+//         kitchenCycle: order.kitchenCycle,
+//         servedAt: now,
+//         readyAt: order.readyAt ?? null,
+//         fromStatus: prevLabel || null,
+//       });
+//     }
+
+//     // ✅ bump revision when KDS changes status
+//     order.revision += 1;
+
+//     await order.save();
+
+//     return res.status(200).json({
+//       message: "Status updated",
+//       order: {
+//         id: String(order._id),
+//         status: order.status,
+//         revision: order.revision ?? 0,
+//         kitchenCycle: order.kitchenCycle ?? 1,
+//         readyAt: order.readyAt ?? null,
+//         servedAt: order.servedAt ?? null,
+//         updatedAt: order.updatedAt ?? null,
+//       },
+//     });
+//   } catch (err) {
+//     console.error("updateKdsOrderStatus error:", err);
+//     return res.status(500).json({ error: err.message || "Server error" });
+//   }
+// };
 
 // export const updateKdsOrderStatus = async (req, res) => {
 //   try {
