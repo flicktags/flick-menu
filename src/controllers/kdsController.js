@@ -195,42 +195,27 @@ export const getKdsOverview = async (req, res) => {
       ],
     };
 
-    // ✅ AUTO SERVE: READY -> SERVED after 60s
-    // IMPORTANT: This runs only when this endpoint is called (KDS polling).
+    // ✅ AUTO SERVE: READY -> SERVED after 60s (BACKWARD COMPATIBLE)
     const now = new Date();
     const cutoff = new Date(now.getTime() - 60 * 1000);
 
-    // ✅ Backward compatible + type-safe cycle match:
-    // - If readyAtCycle missing/null -> still auto serve (old behavior)
-    // - Else serve only if readyAtCycle == kitchenCycle (string/number tolerant)
-    const autoServeFilter = {
-      branchId,
-      ...timeQuery,
-      status: "Ready",
-      readyAt: { $exists: true, $ne: null, $lte: cutoff },
-      $or: [
-        { readyAtCycle: { $exists: false } },
-        { readyAtCycle: null },
-        {
-          $expr: {
-            $eq: [
-              { $toString: "$readyAtCycle" },
-              { $toString: "$kitchenCycle" },
-            ],
-          },
-        },
-      ],
-    };
-
-    const autoServeUpdate = {
-      $set: { status: "Served", servedAt: now },
-      $inc: { revision: 1 },
-    };
-
-    const autoResult = await Order.updateMany(autoServeFilter, autoServeUpdate);
-
-    // Optional debug (keep or remove)
-    // console.log("[KDS] auto-serve matched:", autoResult?.matchedCount, "modified:", autoResult?.modifiedCount);
+    await Order.updateMany(
+      {
+        branchId,
+        ...timeQuery,
+        status: "Ready",
+        readyAt: { $exists: true, $ne: null, $lte: cutoff },
+        $or: [
+          { readyAtCycle: { $exists: false } }, // old orders
+          { readyAtCycle: null },               // old orders
+          { $expr: { $eq: ["$readyAtCycle", "$kitchenCycle"] } }, // new orders
+        ],
+      },
+      {
+        $set: { status: "Served", servedAt: now },
+        $inc: { revision: 1 },
+      }
+    );
 
     const orders = await Order.find({
       branchId,
@@ -270,6 +255,7 @@ export const getKdsOverview = async (req, res) => {
     for (const o of orders) {
       const bucket = classifyStatus(o.status);
 
+      // ✅ Enrich QR (add label even if order.qr.label is missing)
       const qr = o.qr || null;
       const qid = qr?.qrId ? String(qr.qrId) : "";
       const qrDoc = qid ? qrMap[qid] : null;
@@ -283,6 +269,27 @@ export const getKdsOverview = async (req, res) => {
           }
         : null;
 
+      // ✅ IMPORTANT: pick items from active cycle (THIS is what you want!)
+      const cycles = Array.isArray(o.kitchenCycles) ? o.kitchenCycles : [];
+      const activeCycleNo = Number(o.kitchenCycle || 1) || 1;
+
+      // support either `cycle` or older `cycleNo`
+      const activeCycle =
+        cycles.find((c) => Number(c?.cycle) === activeCycleNo) ||
+        cycles.find((c) => Number(c?.cycleNo) === activeCycleNo) ||
+        cycles[cycles.length - 1] ||
+        null;
+
+      const cycleItemsRaw = Array.isArray(activeCycle?.items) ? activeCycle.items : [];
+
+      // normalize lineStatus if missing
+      const cycleItems = cycleItemsRaw.map((it) => ({
+        ...it,
+        lineStatus: it?.lineStatus || it?.kitchenStatus || "PENDING",
+        kitchenCycle: it?.kitchenCycle ?? activeCycleNo,
+        lineId: it?.lineId ?? it?._id ?? null,
+      }));
+
       const mapped = {
         id: String(o._id),
         orderNumber: o.orderNumber,
@@ -293,14 +300,29 @@ export const getKdsOverview = async (req, res) => {
         pricing: o.pricing || null,
         qr: enrichedQr,
         customer: o.customer || null,
-        items: o.items || [],
+
+        // ✅ THIS is now cycle items (with lineStatus)
+        items: cycleItems,
+
+        // keep legacy too so nothing breaks anywhere else
+        legacyItems: o.items || [],
+
         placedAt: o.placedAt ?? null,
         createdAt: o.createdAt ?? null,
         updatedAt: o.updatedAt ?? null,
         readyAt: o.readyAt ?? null,
         servedAt: o.servedAt ?? null,
+
         revision: o.revision ?? 0,
-        kitchenCycle: o.kitchenCycle ?? 1,
+        kitchenCycle: activeCycleNo,
+        activeCycle: activeCycle
+          ? {
+              cycle: activeCycle.cycle ?? activeCycle.cycleNo ?? activeCycleNo,
+              status: activeCycle.status ?? null,
+              startedAt: activeCycle.startedAt ?? null,
+              completedAt: activeCycle.completedAt ?? null,
+            }
+          : null,
       };
 
       if (bucket === "active") active.push(mapped);
@@ -330,6 +352,165 @@ export const getKdsOverview = async (req, res) => {
     return res.status(500).json({ error: err.message || "Server error" });
   }
 };
+
+// export const getKdsOverview = async (req, res) => {
+//   try {
+//     const branchId = String(req.query.branchId || "").trim();
+//     if (!branchId) return res.status(400).json({ error: "Missing branchId" });
+
+//     const branch = await Branch.findOne({ branchId }).lean();
+//     if (!branch) return res.status(404).json({ error: "Branch not found" });
+
+//     const tz = String(branch.timeZone || req.query.tz || "Asia/Bahrain").trim();
+//     const openingHours = branch.openingHours || {};
+
+//     const { startTz, endTz, label } = resolveCurrentShiftWindow({ openingHours, tz });
+
+//     const fromUtc = startTz.toUTC().toJSDate();
+//     const toUtc = endTz.toUTC().toJSDate();
+
+//     const timeQuery = {
+//       $or: [
+//         { placedAt: { $gte: fromUtc, $lt: toUtc } },
+//         { createdAt: { $gte: fromUtc, $lt: toUtc } },
+//       ],
+//     };
+
+//     // ✅ AUTO SERVE: READY -> SERVED after 60s
+//     // IMPORTANT: This runs only when this endpoint is called (KDS polling).
+//     const now = new Date();
+//     const cutoff = new Date(now.getTime() - 60 * 1000);
+
+//     // ✅ Backward compatible + type-safe cycle match:
+//     // - If readyAtCycle missing/null -> still auto serve (old behavior)
+//     // - Else serve only if readyAtCycle == kitchenCycle (string/number tolerant)
+//     const autoServeFilter = {
+//       branchId,
+//       ...timeQuery,
+//       status: "Ready",
+//       readyAt: { $exists: true, $ne: null, $lte: cutoff },
+//       $or: [
+//         { readyAtCycle: { $exists: false } },
+//         { readyAtCycle: null },
+//         {
+//           $expr: {
+//             $eq: [
+//               { $toString: "$readyAtCycle" },
+//               { $toString: "$kitchenCycle" },
+//             ],
+//           },
+//         },
+//       ],
+//     };
+
+//     const autoServeUpdate = {
+//       $set: { status: "Served", servedAt: now },
+//       $inc: { revision: 1 },
+//     };
+
+//     const autoResult = await Order.updateMany(autoServeFilter, autoServeUpdate);
+
+//     // Optional debug (keep or remove)
+//     // console.log("[KDS] auto-serve matched:", autoResult?.matchedCount, "modified:", autoResult?.modifiedCount);
+
+//     const orders = await Order.find({
+//       branchId,
+//       ...timeQuery,
+//     })
+//       .sort({ createdAt: -1 })
+//       .limit(500)
+//       .lean();
+
+//     // ✅ Build qrMap from QR collection (qrId -> {label,type,number})
+//     const qrIds = [
+//       ...new Set(
+//         orders
+//           .map((o) => o?.qr?.qrId)
+//           .filter(Boolean)
+//           .map(String)
+//       ),
+//     ];
+
+//     let qrMap = {};
+//     if (qrIds.length) {
+//       const qrs = await Qr.find(
+//         { qrId: { $in: qrIds } },
+//         { qrId: 1, label: 1, type: 1, number: 1 }
+//       ).lean();
+
+//       qrMap = qrs.reduce((acc, q) => {
+//         acc[String(q.qrId)] = q;
+//         return acc;
+//       }, {});
+//     }
+
+//     const active = [];
+//     const completed = [];
+//     const cancelled = [];
+
+//     for (const o of orders) {
+//       const bucket = classifyStatus(o.status);
+
+//       const qr = o.qr || null;
+//       const qid = qr?.qrId ? String(qr.qrId) : "";
+//       const qrDoc = qid ? qrMap[qid] : null;
+
+//       const enrichedQr = qr
+//         ? {
+//             ...qr,
+//             label: qr.label ?? (qrDoc ? qrDoc.label : null),
+//             type: qr.type ?? (qrDoc ? qrDoc.type : null),
+//             number: qr.number ?? (qrDoc ? qrDoc.number : null),
+//           }
+//         : null;
+
+//       const mapped = {
+//         id: String(o._id),
+//         orderNumber: o.orderNumber,
+//         tokenNumber: o.tokenNumber ?? null,
+//         status: o.status || "Pending",
+//         branchId: o.branchId,
+//         currency: o.currency,
+//         pricing: o.pricing || null,
+//         qr: enrichedQr,
+//         customer: o.customer || null,
+//         items: o.items || [],
+//         placedAt: o.placedAt ?? null,
+//         createdAt: o.createdAt ?? null,
+//         updatedAt: o.updatedAt ?? null,
+//         readyAt: o.readyAt ?? null,
+//         servedAt: o.servedAt ?? null,
+//         revision: o.revision ?? 0,
+//         kitchenCycle: o.kitchenCycle ?? 1,
+//       };
+
+//       if (bucket === "active") active.push(mapped);
+//       else if (bucket === "completed") completed.push(mapped);
+//       else cancelled.push(mapped);
+//     }
+
+//     return res.status(200).json({
+//       shift: {
+//         tz,
+//         from: startTz.toISO(),
+//         to: endTz.toISO(),
+//         label,
+//       },
+//       counts: {
+//         active: active.length,
+//         completed: completed.length,
+//         cancelled: cancelled.length,
+//         total: orders.length,
+//       },
+//       active,
+//       completed,
+//       cancelled,
+//     });
+//   } catch (err) {
+//     console.error("getKdsOverview error:", err);
+//     return res.status(500).json({ error: err.message || "Server error" });
+//   }
+// };
 
 
 /**
