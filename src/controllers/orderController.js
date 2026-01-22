@@ -675,7 +675,9 @@ const publicToken = crypto.randomBytes(16).toString("hex"); // 32 chars
       clientTzOffsetMinutes: parsedOffset,
 
       // ✅ business timestamp (use client if available)
-      placedAt: parsedClientCreatedAt || new Date(),
+      // placedAt: parsedClientCreatedAt || new Date(),
+      placedAt: new Date(), // ✅ server time only (UTC instant)
+
     };
 
     const counterKey = `orders:daily:${vendorId}:${branch.branchId}:${ymd}`;
@@ -742,6 +744,55 @@ const publicToken = crypto.randomBytes(16).toString("hex"); // 32 chars
 // ============ PUBLIC: add items to existing order ============
 // controllers/orderController.js
 // ✅ Modified addItemsToPublicOrder with "reopen flow" logic + revision/cycle tracking
+function parseClientIsoWithZone(iso) {
+  if (!iso) return null;
+
+  const s = String(iso).trim();
+  // Require timezone: ends with Z or has +HH:MM / -HH:MM
+  const hasZone = /Z$|[+-]\d{2}:\d{2}$/.test(s);
+  if (!hasZone) return null;
+
+  const d = new Date(s);
+  if (isNaN(d.getTime())) return null;
+  return d;
+}
+
+// ✅ Safe fallback: if client sends a timezone-less ISO string, interpret it as "local time"
+// using clientTzOffsetMinutes, then convert to the correct UTC instant.
+function parseLocalIsoWithOffset(iso, offsetMinutes) {
+  if (!iso) return null;
+  const s = String(iso).trim();
+
+  // If it already has timezone, don't parse here
+  if (/[Zz]$|[+-]\d{2}:\d{2}$/.test(s)) return null;
+
+  const off = Number(offsetMinutes);
+  if (Number.isNaN(off) || off < -840 || off > 840) return null;
+
+  // Expect: YYYY-MM-DDTHH:mm[:ss][.SSS]
+  const m =
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?$/.exec(
+      s
+    );
+  if (!m) return null;
+
+  const year = Number(m[1]);
+  const month = Number(m[2]);
+  const day = Number(m[3]);
+  const hour = Number(m[4]);
+  const minute = Number(m[5]);
+  const second = Number(m[6] || 0);
+  const ms = Number((m[7] || "0").padEnd(3, "0"));
+
+  // local wall-clock -> UTC by subtracting offset minutes
+  const utcMs =
+    Date.UTC(year, month - 1, day, hour, minute, second, ms) - off * 60 * 1000;
+
+  const d = new Date(utcMs);
+  if (isNaN(d.getTime())) return null;
+  return d;
+}
+
 
 export const addItemsToPublicOrder = async (req, res) => {
   try {
@@ -980,7 +1031,9 @@ export const addItemsToPublicOrder = async (req, res) => {
           ? Array.isArray(group.options)
             ? group.options
             : []
-          : addonGroups.flatMap((g) => (Array.isArray(g?.options) ? g.options : []));
+          : addonGroups.flatMap((g) =>
+              Array.isArray(g?.options) ? g.options : []
+            );
 
         for (const optLabel of optionLabels) {
           const opt = allowedOptions.find(
@@ -1086,12 +1139,10 @@ export const addItemsToPublicOrder = async (req, res) => {
       subtotalExVat,
     };
 
-    // optional client timestamps
-    let parsedClientCreatedAt = null;
-    if (clientCreatedAt) {
-      const dt = new Date(clientCreatedAt);
-      if (!isNaN(dt.getTime())) parsedClientCreatedAt = dt;
-    }
+    // ✅ optional client timestamps (SAFE parse)
+    let parsedClientCreatedAt =
+      parseClientIsoWithZone(clientCreatedAt) ??
+      parseLocalIsoWithOffset(clientCreatedAt, clientTzOffsetMinutes);
 
     let parsedOffset = null;
     if (
@@ -1176,11 +1227,7 @@ export const addItemsToPublicOrder = async (req, res) => {
 //     const { id } = req.params;
 //     const token = String(req.query.token || "").trim();
 
-//     const {
-//       items,
-//       clientCreatedAt,
-//       clientTzOffsetMinutes,
-//     } = req.body || {};
+//     const { items, clientCreatedAt, clientTzOffsetMinutes } = req.body || {};
 
 //     if (!mongoose.Types.ObjectId.isValid(id)) {
 //       return res.status(400).json({ error: "Invalid order id" });
@@ -1201,18 +1248,21 @@ export const addItemsToPublicOrder = async (req, res) => {
 //       return res.status(403).json({ error: "Invalid token" });
 //     }
 
-//     // 2) block if closed
-//     const status = String(order.status || "").toLowerCase();
+//     // 2) block ONLY terminal/closed (we ALLOW add-items on READY/SERVED)
+//     const status = String(order.status || "").trim().toLowerCase();
 //     const closedStatuses = new Set([
 //       "completed",
 //       "cancelled",
 //       "canceled",
+//       "rejected",
 //       "paid",
 //       "closed",
 //       "delivered",
 //     ]);
 //     if (closedStatuses.has(status)) {
-//       return res.status(409).json({ error: "Order is closed; cannot add items" });
+//       return res
+//         .status(409)
+//         .json({ error: "Order is closed; cannot add items" });
 //     }
 
 //     // 3) load branch (for tax settings + ownership)
@@ -1220,13 +1270,23 @@ export const addItemsToPublicOrder = async (req, res) => {
 //     if (!branch) return res.status(404).json({ error: "Branch not found" });
 
 //     // Use tax settings (prefer branch; fall back to existing order.pricing if needed)
-//     const taxes = (branch.taxes && typeof branch.taxes === "object") ? branch.taxes : {};
-//     const vatPercent = Number(order?.pricing?.vatPercent ?? taxes.vatPercentage ?? 0) || 0;
-//     const serviceChargePercent = Number(order?.pricing?.serviceChargePercent ?? taxes.serviceChargePercentage ?? 0) || 0;
-//     const isVatInclusive = (order?.pricing?.isVatInclusive === true) || (taxes.isVatInclusive === true);
+//     const taxes =
+//       branch.taxes && typeof branch.taxes === "object" ? branch.taxes : {};
+//     const vatPercent =
+//       Number(order?.pricing?.vatPercent ?? taxes.vatPercentage ?? 0) || 0;
+//     const serviceChargePercent =
+//       Number(
+//         order?.pricing?.serviceChargePercent ??
+//           taxes.serviceChargePercentage ??
+//           0
+//       ) || 0;
+//     const isVatInclusive =
+//       order?.pricing?.isVatInclusive === true || taxes.isVatInclusive === true;
 
 //     const vendorId = branch.vendorId;
-//     const round3 = (n) => Math.round((Number(n || 0) + Number.EPSILON) * 1000) / 1000;
+
+//     const round3 = (n) =>
+//       Math.round((Number(n || 0) + Number.EPSILON) * 1000) / 1000;
 
 //     // helper: apply discount to base price (not addons)
 //     const now = new Date();
@@ -1240,14 +1300,24 @@ export const addItemsToPublicOrder = async (req, res) => {
 //       if (validUntil && validUntil.getTime() < now.getTime()) return base;
 //       if (!type || value <= 0) return base;
 
-//       if (type === "percentage") return Math.max(0, base - (base * (value / 100)));
+//       if (type === "percentage") return Math.max(0, base - base * (value / 100));
 //       if (type === "amount") return Math.max(0, base - value);
 //       return base;
 //     }
 
 //     // 4) Build ObjectIds from request
-//     const rawIds = [...new Set(items.map((x) => String(x?.itemId || x?.id || "").trim()).filter(Boolean))];
-//     if (rawIds.length === 0) return res.status(400).json({ error: "Invalid items payload (no itemId)" });
+//     const rawIds = [
+//       ...new Set(
+//         items
+//           .map((x) => String(x?.itemId || x?.id || "").trim())
+//           .filter(Boolean)
+//       ),
+//     ];
+//     if (rawIds.length === 0) {
+//       return res
+//         .status(400)
+//         .json({ error: "Invalid items payload (no itemId)" });
+//     }
 
 //     const objectIds = [];
 //     for (const itemId of rawIds) {
@@ -1289,19 +1359,31 @@ export const addItemsToPublicOrder = async (req, res) => {
 //       let sizeObj = null;
 
 //       if (dbIt.isSizedBased === true) {
-//         const sizeLabel = String(reqIt?.size?.label || reqIt?.sizeLabel || "").trim();
+//         const sizeLabel = String(
+//           reqIt?.size?.label || reqIt?.sizeLabel || ""
+//         ).trim();
 //         if (!sizeLabel) {
-//           return res.status(400).json({ error: "Missing size for sized item", itemId: mongoId });
+//           return res.status(400).json({
+//             error: "Missing size for sized item",
+//             itemId: mongoId,
+//           });
 //         }
 //         const sizes = Array.isArray(dbIt.sizes) ? dbIt.sizes : [];
-//         const matched = sizes.find((s) => String(s?.label || "").trim() === sizeLabel);
+//         const matched = sizes.find(
+//           (s) => String(s?.label || "").trim() === sizeLabel
+//         );
 //         if (!matched) {
-//           return res.status(400).json({ error: "Invalid size selected", itemId: mongoId, sizeLabel });
+//           return res.status(400).json({
+//             error: "Invalid size selected",
+//             itemId: mongoId,
+//             sizeLabel,
+//           });
 //         }
 //         basePrice = Number(matched.price ?? 0) || 0;
 //         sizeObj = { label: sizeLabel, price: round3(basePrice) };
 //       } else {
-//         const offered = (dbIt.offeredPrice !== undefined) ? (Number(dbIt.offeredPrice) || 0) : 0;
+//         const offered =
+//           dbIt.offeredPrice !== undefined ? Number(dbIt.offeredPrice) || 0 : 0;
 //         const fixed = Number(dbIt.fixedPrice ?? 0) || 0;
 //         basePrice = offered > 0 ? offered : fixed;
 //       }
@@ -1314,10 +1396,15 @@ export const addItemsToPublicOrder = async (req, res) => {
 //       const selectionsByGroup = new Map();
 
 //       for (const a of reqAddons) {
-//         const groupLabel = String(a?.groupLabel || a?.group || a?.addonGroup || "").trim();
+//         const groupLabel = String(
+//           a?.groupLabel || a?.group || a?.addonGroup || ""
+//         ).trim();
 //         const optionLabel = String(a?.optionLabel || a?.label || "").trim();
 //         if (!optionLabel) {
-//           return res.status(400).json({ error: "Invalid addon (missing option label)", itemId: mongoId });
+//           return res.status(400).json({
+//             error: "Invalid addon (missing option label)",
+//             itemId: mongoId,
+//           });
 //         }
 //         const key = groupLabel || "__default__";
 //         if (!selectionsByGroup.has(key)) selectionsByGroup.set(key, []);
@@ -1333,10 +1420,16 @@ export const addItemsToPublicOrder = async (req, res) => {
 
 //         if (groupKey !== "__default__") {
 //           group = addonGroups.find(
-//             (g) => String(g?.label || "").trim().toLowerCase() === groupKey.trim().toLowerCase()
+//             (g) =>
+//               String(g?.label || "").trim().toLowerCase() ===
+//               groupKey.trim().toLowerCase()
 //           );
 //           if (!group) {
-//             return res.status(400).json({ error: "Invalid addon group", itemId: mongoId, groupLabel: groupKey });
+//             return res.status(400).json({
+//               error: "Invalid addon group",
+//               itemId: mongoId,
+//               groupLabel: groupKey,
+//             });
 //           }
 //         }
 
@@ -1345,20 +1438,34 @@ export const addItemsToPublicOrder = async (req, res) => {
 //           const max = Number(group.max ?? 1) || 1;
 
 //           if (optionLabels.length < min) {
-//             return res.status(400).json({ error: "Addon group below min", itemId: mongoId, groupLabel: groupKey, min });
+//             return res.status(400).json({
+//               error: "Addon group below min",
+//               itemId: mongoId,
+//               groupLabel: groupKey,
+//               min,
+//             });
 //           }
 //           if (optionLabels.length > max) {
-//             return res.status(400).json({ error: "Addon group above max", itemId: mongoId, groupLabel: groupKey, max });
+//             return res.status(400).json({
+//               error: "Addon group above max",
+//               itemId: mongoId,
+//               groupLabel: groupKey,
+//               max,
+//             });
 //           }
 //         }
 
 //         const allowedOptions = group
-//           ? (Array.isArray(group.options) ? group.options : [])
-//           : addonGroups.flatMap((g) => Array.isArray(g?.options) ? g.options : []);
+//           ? Array.isArray(group.options)
+//             ? group.options
+//             : []
+//           : addonGroups.flatMap((g) => (Array.isArray(g?.options) ? g.options : []));
 
 //         for (const optLabel of optionLabels) {
 //           const opt = allowedOptions.find(
-//             (o) => String(o?.label || "").trim().toLowerCase() === optLabel.trim().toLowerCase()
+//             (o) =>
+//               String(o?.label || "").trim().toLowerCase() ===
+//               optLabel.trim().toLowerCase()
 //           );
 //           if (!opt) {
 //             return res.status(400).json({
@@ -1420,7 +1527,9 @@ export const addItemsToPublicOrder = async (req, res) => {
 //     const oldSubtotal = Number(order?.pricing?.subtotal || 0) || 0;
 //     const newSubtotal = round3(oldSubtotal + addedSubtotal);
 
-//     const serviceChargeAmount = round3(newSubtotal * (serviceChargePercent / 100));
+//     const serviceChargeAmount = round3(
+//       newSubtotal * (serviceChargePercent / 100)
+//     );
 //     const vatBase = round3(newSubtotal + serviceChargeAmount);
 
 //     let vatAmount = 0;
@@ -1443,6 +1552,7 @@ export const addItemsToPublicOrder = async (req, res) => {
 //       grandTotal = round3(vatBase);
 //     }
 
+//     // 7) Apply changes to order
 //     order.items = [...(order.items || []), ...newOrderItems];
 //     order.pricing = {
 //       subtotal: round3(newSubtotal),
@@ -1463,7 +1573,10 @@ export const addItemsToPublicOrder = async (req, res) => {
 //     }
 
 //     let parsedOffset = null;
-//     if (clientTzOffsetMinutes !== undefined && clientTzOffsetMinutes !== null) {
+//     if (
+//       clientTzOffsetMinutes !== undefined &&
+//       clientTzOffsetMinutes !== null
+//     ) {
 //       const off = Number(clientTzOffsetMinutes);
 //       if (!Number.isNaN(off) && off >= -840 && off <= 840) parsedOffset = off;
 //     }
@@ -1471,6 +1584,37 @@ export const addItemsToPublicOrder = async (req, res) => {
 //     // keep a simple audit trail (optional but useful)
 //     order.clientCreatedAt = parsedClientCreatedAt ?? order.clientCreatedAt;
 //     order.clientTzOffsetMinutes = parsedOffset ?? order.clientTzOffsetMinutes;
+
+//     // 8) ✅ REOPEN FLOW LOGIC + REVISION/CYCLE
+//     // If order was READY or SERVED, adding items should reopen to PREPARING (same order).
+//     const beforeLabel = String(order.status || "").trim();
+//     const before = beforeLabel.toLowerCase();
+//     const now2 = new Date();
+
+//     // ensure defaults exist (schema should have them, but safe)
+//     order.revision = Number(order.revision || 0) || 0;
+//     order.kitchenCycle = Number(order.kitchenCycle || 1) || 1;
+//     order.servedHistory = Array.isArray(order.servedHistory)
+//       ? order.servedHistory
+//       : [];
+
+//     if (before === "ready" || before === "served") {
+//       // If it was SERVED, start a new kitchen cycle (round)
+//       if (before === "served") {
+//         order.kitchenCycle = (Number(order.kitchenCycle || 1) || 1) + 1;
+//       }
+
+//       // reopen kitchen flow
+//       order.status = "Preparing";
+//       order.readyAt = null;
+//       order.servedAt = null;
+
+//       // bump revision because this is a meaningful kitchen change
+//       order.revision += 1;
+//     } else {
+//       // Even if it's pending/preparing/etc, bump revision so KDS can detect add-more
+//       order.revision += 1;
+//     }
 
 //     await order.save();
 
@@ -1481,8 +1625,11 @@ export const addItemsToPublicOrder = async (req, res) => {
 //         orderNumber: order.orderNumber,
 //         tokenNumber: order.tokenNumber,
 //         branchId: order.branchId,
+//         vendorId: order.vendorId ?? null,
 //         currency: order.currency,
 //         status: order.status,
+//         revision: order.revision ?? 0,
+//         kitchenCycle: order.kitchenCycle ?? 1,
 //         qr: order.qr,
 //         customer: order.customer,
 //         items: order.items,
@@ -1492,6 +1639,9 @@ export const addItemsToPublicOrder = async (req, res) => {
 //         placedAt: order.placedAt ?? null,
 //         createdAt: order.createdAt ?? null,
 //         updatedAt: order.updatedAt ?? null,
+//         readyAt: order.readyAt ?? null,
+//         servedAt: order.servedAt ?? null,
+//         servedHistory: order.servedHistory ?? [],
 //       },
 //     });
 //   } catch (err) {
@@ -1499,7 +1649,6 @@ export const addItemsToPublicOrder = async (req, res) => {
 //     return res.status(500).json({ error: err.message || "Server error" });
 //   }
 // };
-
 
 export const getPublicOrderById = async (req, res) => {
   try {
