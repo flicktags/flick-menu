@@ -457,6 +457,7 @@ function flattenCyclesForKdsItems(kitchenCycles) {
 // ============ PUBLIC: place order (no token) ============
 
 // ============ PUBLIC: place order (server-calculated pricing) ============
+
 export const createOrder = async (req, res) => {
   try {
     const {
@@ -504,10 +505,11 @@ export const createOrder = async (req, res) => {
           .filter(Boolean)
       ),
     ];
-    if (rawIds.length === 0)
+    if (rawIds.length === 0) {
       return res
         .status(400)
         .json({ error: "Invalid items payload (no itemId)" });
+    }
 
     const objectIds = [];
     for (const id of rawIds) {
@@ -766,12 +768,10 @@ export const createOrder = async (req, res) => {
       // ---------------------------
       const cycleLine = {
         ...legacyLine,
-
-        // ✅ new fields for option A
-        lineId,              // unique identifier for this order line
-        kitchenCycle: 1,     // first cycle
-        lineStatus: "PENDING", // per-line status (PENDING -> PREPARING -> READY -> SERVED)
-        addedAt: now,        // when this line was added to the order
+        lineId,
+        kitchenCycle: 1,
+        lineStatus: "PENDING",
+        addedAt: now,
       };
       cycle1Items.push(cycleLine);
     }
@@ -820,7 +820,7 @@ export const createOrder = async (req, res) => {
       if (!isNaN(dt.getTime())) parsedClientCreatedAt = dt;
     }
 
-    // offset minutes validation (optional, but recommended)
+    // offset minutes validation (optional)
     let parsedOffset = null;
     if (clientTzOffsetMinutes !== undefined && clientTzOffsetMinutes !== null) {
       const off = Number(clientTzOffsetMinutes);
@@ -845,14 +845,11 @@ export const createOrder = async (req, res) => {
       // ✅ keep old items for compatibility
       items: orderItems,
 
-      // ✅ NEW: cycle container
+      // ✅ IMPORTANT: schema requires kitchenCycles[].cycle (NOT cycleNo)
       kitchenCycles: [
         {
-          cycleNo: 1,
-          status: "PENDING",      // overall cycle status
-          startedAt: now,
-          completedAt: null,
-          items: cycle1Items,     // ✅ HERE is where cycle1Items is used
+          cycle: 1,          // ✅ REQUIRED (fixes your error)
+          items: cycle1Items // ✅ cycle1Items is used here
         },
       ],
 
@@ -865,7 +862,7 @@ export const createOrder = async (req, res) => {
       clientTzOffsetMinutes: parsedOffset,
       placedAt: new Date(), // server time (UTC instant)
 
-      // existing + new fields you already added
+      // keep your existing fields (only if your schema has them)
       revision: 0,
       kitchenCycle: 1,
       readyAt: null,
@@ -946,6 +943,7 @@ export const createOrder = async (req, res) => {
   }
 };
 
+
 // export const createOrder = async (req, res) => {
 //   try {
 //     const {
@@ -969,22 +967,34 @@ export const createOrder = async (req, res) => {
 //     if (!branch) return res.status(404).json({ error: "Branch not found" });
 
 //     // ✅ authoritative tax settings from branch
-//     const taxes = (branch.taxes && typeof branch.taxes === "object") ? branch.taxes : {};
+//     const taxes =
+//       branch.taxes && typeof branch.taxes === "object" ? branch.taxes : {};
 //     const vatPercent = Number(taxes.vatPercentage ?? 0) || 0;
-//     const serviceChargePercent = Number(taxes.serviceChargePercentage ?? 0) || 0;
+//     const serviceChargePercent =
+//       Number(taxes.serviceChargePercentage ?? 0) || 0;
 //     const isVatInclusive = taxes.isVatInclusive === true;
 
 //     const vendorId = branch.vendorId;
 //     const tz = branch.timeZone || "UTC";
 //     const { y, m, d, ymd } = tzPartsOf(new Date(), tz);
 
-//     const round3 = (n) => Math.round((Number(n || 0) + Number.EPSILON) * 1000) / 1000;
+//     const round3 = (n) =>
+//       Math.round((Number(n || 0) + Number.EPSILON) * 1000) / 1000;
 
 //     // --------------------------------------
 //     // 1) Build list of Mongo ObjectIds
 //     // --------------------------------------
-//     const rawIds = [...new Set(items.map((x) => String(x?.itemId || x?.id || "").trim()).filter(Boolean))];
-//     if (rawIds.length === 0) return res.status(400).json({ error: "Invalid items payload (no itemId)" });
+//     const rawIds = [
+//       ...new Set(
+//         items
+//           .map((x) => String(x?.itemId || x?.id || "").trim())
+//           .filter(Boolean)
+//       ),
+//     ];
+//     if (rawIds.length === 0)
+//       return res
+//         .status(400)
+//         .json({ error: "Invalid items payload (no itemId)" });
 
 //     const objectIds = [];
 //     for (const id of rawIds) {
@@ -1017,10 +1027,14 @@ export const createOrder = async (req, res) => {
 //     // 2) Server-priced items
 //     // --------------------------------------
 //     const now = new Date();
+
+//     // ✅ legacy array (kept for backward compatibility)
 //     const orderItems = [];
+
+//     // ✅ NEW: cycle-aware items (cycle 1)
+//     const cycle1Items = [];
+
 //     let subtotal = 0;
-
-
 
 //     // helper: apply discount to base price (not addons)
 //     function applyDiscount(base, discount) {
@@ -1054,19 +1068,31 @@ export const createOrder = async (req, res) => {
 //       let sizeObj = null;
 
 //       if (dbIt.isSizedBased === true) {
-//         const sizeLabel = String(reqIt?.size?.label || reqIt?.sizeLabel || "").trim();
+//         const sizeLabel = String(
+//           reqIt?.size?.label || reqIt?.sizeLabel || ""
+//         ).trim();
 //         if (!sizeLabel) {
-//           return res.status(400).json({ error: "Missing size for sized item", itemId: mongoId });
+//           return res.status(400).json({
+//             error: "Missing size for sized item",
+//             itemId: mongoId,
+//           });
 //         }
 //         const sizes = Array.isArray(dbIt.sizes) ? dbIt.sizes : [];
-//         const matched = sizes.find((s) => String(s?.label || "").trim() === sizeLabel);
+//         const matched = sizes.find(
+//           (s) => String(s?.label || "").trim() === sizeLabel
+//         );
 //         if (!matched) {
-//           return res.status(400).json({ error: "Invalid size selected", itemId: mongoId, sizeLabel });
+//           return res.status(400).json({
+//             error: "Invalid size selected",
+//             itemId: mongoId,
+//             sizeLabel,
+//           });
 //         }
 //         basePrice = Number(matched.price ?? 0) || 0;
 //         sizeObj = { label: sizeLabel, price: round3(basePrice) };
 //       } else {
-//         const offered = (dbIt.offeredPrice !== undefined) ? (Number(dbIt.offeredPrice) || 0) : 0;
+//         const offered =
+//           dbIt.offeredPrice !== undefined ? Number(dbIt.offeredPrice) || 0 : 0;
 //         const fixed = Number(dbIt.fixedPrice ?? 0) || 0;
 //         basePrice = offered > 0 ? offered : fixed;
 //       }
@@ -1074,16 +1100,21 @@ export const createOrder = async (req, res) => {
 //       // ---- discount (applies to base)
 //       basePrice = applyDiscount(basePrice, dbIt.discount);
 
-//       // ---- addons validation by group+option label (because your schema has no option id)
+//       // ---- addons validation by group+option label
 //       const reqAddons = Array.isArray(reqIt?.addons) ? reqIt.addons : [];
 
 //       // group label -> array of selected option labels
 //       const selectionsByGroup = new Map();
 //       for (const a of reqAddons) {
-//         const groupLabel = String(a?.groupLabel || a?.group || a?.addonGroup || "").trim();
+//         const groupLabel = String(
+//           a?.groupLabel || a?.group || a?.addonGroup || ""
+//         ).trim();
 //         const optionLabel = String(a?.optionLabel || a?.label || "").trim();
 //         if (!optionLabel) {
-//           return res.status(400).json({ error: "Invalid addon (missing option label)", itemId: mongoId });
+//           return res.status(400).json({
+//             error: "Invalid addon (missing option label)",
+//             itemId: mongoId,
+//           });
 //         }
 //         const key = groupLabel || "__default__";
 //         if (!selectionsByGroup.has(key)) selectionsByGroup.set(key, []);
@@ -1097,15 +1128,20 @@ export const createOrder = async (req, res) => {
 
 //       // validate each request selection against db groups
 //       for (const [groupKey, optionLabels] of selectionsByGroup.entries()) {
-//         // find group: match by label (case-insensitive). If groupKey == __default__, allow match across all groups.
 //         let group = null;
 
 //         if (groupKey !== "__default__") {
 //           group = addonGroups.find(
-//             (g) => String(g?.label || "").trim().toLowerCase() === groupKey.trim().toLowerCase()
+//             (g) =>
+//               String(g?.label || "").trim().toLowerCase() ===
+//               groupKey.trim().toLowerCase()
 //           );
 //           if (!group) {
-//             return res.status(400).json({ error: "Invalid addon group", itemId: mongoId, groupLabel: groupKey });
+//             return res.status(400).json({
+//               error: "Invalid addon group",
+//               itemId: mongoId,
+//               groupLabel: groupKey,
+//             });
 //           }
 //         }
 
@@ -1115,21 +1151,37 @@ export const createOrder = async (req, res) => {
 //           const max = Number(group.max ?? 1) || 1;
 
 //           if (optionLabels.length < min) {
-//             return res.status(400).json({ error: "Addon group below min", itemId: mongoId, groupLabel: groupKey, min });
+//             return res.status(400).json({
+//               error: "Addon group below min",
+//               itemId: mongoId,
+//               groupLabel: groupKey,
+//               min,
+//             });
 //           }
 //           if (optionLabels.length > max) {
-//             return res.status(400).json({ error: "Addon group above max", itemId: mongoId, groupLabel: groupKey, max });
+//             return res.status(400).json({
+//               error: "Addon group above max",
+//               itemId: mongoId,
+//               groupLabel: groupKey,
+//               max,
+//             });
 //           }
 //         }
 
 //         // resolve options
 //         const allowedOptions = group
-//           ? (Array.isArray(group.options) ? group.options : [])
-//           : addonGroups.flatMap((g) => Array.isArray(g?.options) ? g.options : []);
+//           ? Array.isArray(group.options)
+//             ? group.options
+//             : []
+//           : addonGroups.flatMap((g) =>
+//               Array.isArray(g?.options) ? g.options : []
+//             );
 
 //         for (const optLabel of optionLabels) {
 //           const opt = allowedOptions.find(
-//             (o) => String(o?.label || "").trim().toLowerCase() === optLabel.trim().toLowerCase()
+//             (o) =>
+//               String(o?.label || "").trim().toLowerCase() ===
+//               optLabel.trim().toLowerCase()
 //           );
 //           if (!opt) {
 //             return res.status(400).json({
@@ -1143,7 +1195,6 @@ export const createOrder = async (req, res) => {
 //           const price = Number(opt.price ?? 0) || 0;
 //           addonsTotal += price;
 
-//           // id field in Order.items.addons: use sku if exists else label
 //           finalAddons.push({
 //             id: String(opt.sku || opt.label || "").trim(),
 //             label: String(opt.label || "").trim(),
@@ -1152,11 +1203,14 @@ export const createOrder = async (req, res) => {
 //         }
 //       }
 
-//       // also enforce required groups even if user didn’t send them
+//       // enforce required groups even if user didn’t send them
 //       for (const g of addonGroups) {
 //         if (g?.required === true) {
 //           const key = String(g.label || "").trim().toLowerCase();
-//           const selectedCount = (selectionsByGroup.get(g.label) || selectionsByGroup.get(key) || []).length;
+//           const selectedCount =
+//             (selectionsByGroup.get(g.label) ||
+//               selectionsByGroup.get(key) ||
+//               []).length;
 
 //           const min = Number(g.min ?? 0) || 0;
 //           if (selectedCount < Math.max(1, min)) {
@@ -1173,19 +1227,40 @@ export const createOrder = async (req, res) => {
 //       const lineTotal = round3(unitBasePrice * qty);
 //       subtotal = round3(subtotal + lineTotal);
 
-//       orderItems.push({
-//         itemId: mongoId, // ✅ store Mongo _id as string
+//       // ✅ build a stable-ish lineId (unique per order line)
+//       const lineId = new mongoose.Types.ObjectId().toString();
+
+//       // ---------------------------
+//       // A) Legacy items (unchanged)
+//       // ---------------------------
+//       const legacyLine = {
+//         itemId: mongoId,
 //         nameEnglish: dbIt.nameEnglish || "",
 //         nameArabic: dbIt.nameArabic || "",
 //         imageUrl: dbIt.imageUrl || "",
 //         isSizedBased: dbIt.isSizedBased === true,
-//         size: sizeObj, // {label, price} or null
+//         size: sizeObj,
 //         addons: finalAddons,
 //         unitBasePrice,
 //         quantity: qty,
 //         notes: String(reqIt?.notes || ""),
 //         lineTotal,
-//       });
+//       };
+//       orderItems.push(legacyLine);
+
+//       // ---------------------------
+//       // B) Cycle-aware items (NEW)
+//       // ---------------------------
+//       const cycleLine = {
+//         ...legacyLine,
+
+//         // ✅ new fields for option A
+//         lineId,              // unique identifier for this order line
+//         kitchenCycle: 1,     // first cycle
+//         lineStatus: "PENDING", // per-line status (PENDING -> PREPARING -> READY -> SERVED)
+//         addedAt: now,        // when this line was added to the order
+//       };
+//       cycle1Items.push(cycleLine);
 //     }
 
 //     // --------------------------------------
@@ -1225,30 +1300,24 @@ export const createOrder = async (req, res) => {
 //       subtotalExVat,
 //     };
 
+//     // ✅ optional client timestamps (safe parse)
 //     let parsedClientCreatedAt = null;
-
 //     if (clientCreatedAt) {
-//     const dt = new Date(clientCreatedAt);
-//     if (!isNaN(dt.getTime())) {
-//     parsedClientCreatedAt = dt; // stored as UTC Date internally (Mongo)
+//       const dt = new Date(clientCreatedAt);
+//       if (!isNaN(dt.getTime())) parsedClientCreatedAt = dt;
 //     }
-//   }
 
 //     // offset minutes validation (optional, but recommended)
 //     let parsedOffset = null;
 //     if (clientTzOffsetMinutes !== undefined && clientTzOffsetMinutes !== null) {
-//     const off = Number(clientTzOffsetMinutes);
-//     // time zones are roughly between -840 and +840 minutes
-//     if (!Number.isNaN(off) && off >= -840 && off <= 840) {
-//     parsedOffset = off;
-//   }
-// }
+//       const off = Number(clientTzOffsetMinutes);
+//       if (!Number.isNaN(off) && off >= -840 && off <= 840) parsedOffset = off;
+//     }
 
-// const publicToken = crypto.randomBytes(16).toString("hex"); // 32 chars
-
+//     const publicToken = crypto.randomBytes(16).toString("hex"); // 32 chars
 
 //     // --------------------------------------
-//     // 4) Create order (your existing orderNumber/token logic)
+//     // 4) Create order
 //     // --------------------------------------
 //     const baseDoc = {
 //       vendorId,
@@ -1259,19 +1328,35 @@ export const createOrder = async (req, res) => {
 //         name: customer?.name || "",
 //         phone: customer?.phone || null,
 //       },
+
+//       // ✅ keep old items for compatibility
 //       items: orderItems,
+
+//       // ✅ NEW: cycle container
+//       kitchenCycles: [
+//         {
+//           cycleNo: 1,
+//           status: "PENDING",      // overall cycle status
+//           startedAt: now,
+//           completedAt: null,
+//           items: cycle1Items,     // ✅ HERE is where cycle1Items is used
+//         },
+//       ],
+
 //       pricing,
 //       remarks: remarks || null,
 //       source,
 //       status: "Pending",
-//       publicToken, // ✅ NEW
+//       publicToken,
 //       clientCreatedAt: parsedClientCreatedAt,
 //       clientTzOffsetMinutes: parsedOffset,
+//       placedAt: new Date(), // server time (UTC instant)
 
-//       // ✅ business timestamp (use client if available)
-//       // placedAt: parsedClientCreatedAt || new Date(),
-//       placedAt: new Date(), // ✅ server time only (UTC instant)
-
+//       // existing + new fields you already added
+//       revision: 0,
+//       kitchenCycle: 1,
+//       readyAt: null,
+//       servedAt: null,
 //     };
 
 //     const counterKey = `orders:daily:${vendorId}:${branch.branchId}:${ymd}`;
@@ -1298,14 +1383,18 @@ export const createOrder = async (req, res) => {
 //             id: String(created._id),
 //             orderNumber: created.orderNumber,
 //             tokenNumber: created.tokenNumber,
-//             publicToken: created.publicToken, // ✅ NEW
+//             publicToken: created.publicToken,
 //             vendorId: created.vendorId,
 //             branchId: created.branchId,
 //             currency: created.currency,
 //             status: created.status,
 //             qr: created.qr,
 //             customer: created.customer,
+
+//             // legacy + cycles
 //             items: created.items,
+//             kitchenCycles: created.kitchenCycles || [],
+
 //             pricing: created.pricing,
 //             remarks: created.remarks ?? null,
 //             source: created.source ?? "customer_view",
@@ -1313,10 +1402,20 @@ export const createOrder = async (req, res) => {
 //             placedAt: created.placedAt,
 //             clientCreatedAt: created.clientCreatedAt,
 //             clientTzOffsetMinutes: created.clientTzOffsetMinutes,
+
+//             revision: created.revision ?? 0,
+//             kitchenCycle: created.kitchenCycle ?? 1,
+//             readyAt: created.readyAt ?? null,
+//             servedAt: created.servedAt ?? null,
 //           },
 //         });
 //       } catch (e) {
-//         if (e && e.code === 11000 && e.keyPattern && e.keyPattern.orderNumber) {
+//         if (
+//           e &&
+//           e.code === 11000 &&
+//           e.keyPattern &&
+//           e.keyPattern.orderNumber
+//         ) {
 //           lastErr = e;
 //           continue;
 //         }
@@ -1335,9 +1434,7 @@ export const createOrder = async (req, res) => {
 // };
 
 
-// ============ PUBLIC: add items to existing order ============
-// controllers/orderController.js
-// ✅ Modified addItemsToPublicOrder with "reopen flow" logic + revision/cycle tracking
+
 function parseClientIsoWithZone(iso) {
   if (!iso) return null;
 
