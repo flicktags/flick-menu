@@ -195,23 +195,42 @@ export const getKdsOverview = async (req, res) => {
       ],
     };
 
-    // ✅ AUTO SERVE: READY -> SERVED after 60s (and bump revision)
+    // ✅ AUTO SERVE: READY -> SERVED after 60s
+    // IMPORTANT: This runs only when this endpoint is called (KDS polling).
     const now = new Date();
     const cutoff = new Date(now.getTime() - 60 * 1000);
 
-    await Order.updateMany(
-      {
-        branchId,
-        ...timeQuery,
-        status: "Ready",
-        readyAt: { $exists: true, $ne: null, $lte: cutoff },
-        $expr: { $eq: ["$readyAtCycle", "$kitchenCycle"] },
-      },
-      {
-        $set: { status: "Served", servedAt: now },
-        $inc: { revision: 1 },
-      }
-    );
+    // ✅ Backward compatible + type-safe cycle match:
+    // - If readyAtCycle missing/null -> still auto serve (old behavior)
+    // - Else serve only if readyAtCycle == kitchenCycle (string/number tolerant)
+    const autoServeFilter = {
+      branchId,
+      ...timeQuery,
+      status: "Ready",
+      readyAt: { $exists: true, $ne: null, $lte: cutoff },
+      $or: [
+        { readyAtCycle: { $exists: false } },
+        { readyAtCycle: null },
+        {
+          $expr: {
+            $eq: [
+              { $toString: "$readyAtCycle" },
+              { $toString: "$kitchenCycle" },
+            ],
+          },
+        },
+      ],
+    };
+
+    const autoServeUpdate = {
+      $set: { status: "Served", servedAt: now },
+      $inc: { revision: 1 },
+    };
+
+    const autoResult = await Order.updateMany(autoServeFilter, autoServeUpdate);
+
+    // Optional debug (keep or remove)
+    // console.log("[KDS] auto-serve matched:", autoResult?.matchedCount, "modified:", autoResult?.modifiedCount);
 
     const orders = await Order.find({
       branchId,
@@ -221,6 +240,7 @@ export const getKdsOverview = async (req, res) => {
       .limit(500)
       .lean();
 
+    // ✅ Build qrMap from QR collection (qrId -> {label,type,number})
     const qrIds = [
       ...new Set(
         orders
@@ -279,7 +299,6 @@ export const getKdsOverview = async (req, res) => {
         updatedAt: o.updatedAt ?? null,
         readyAt: o.readyAt ?? null,
         servedAt: o.servedAt ?? null,
-
         revision: o.revision ?? 0,
         kitchenCycle: o.kitchenCycle ?? 1,
       };
@@ -311,6 +330,7 @@ export const getKdsOverview = async (req, res) => {
     return res.status(500).json({ error: err.message || "Server error" });
   }
 };
+
 
 /**
  * PATCH /api/kds/orders/:id/status
@@ -344,38 +364,23 @@ export const updateKdsOrderStatus = async (req, res) => {
       });
     }
 
-    // Ensure kitchenCycles exists
     if (!Array.isArray(order.kitchenCycles)) order.kitchenCycles = [];
-
-    // Ensure at least one cycle exists
     if (order.kitchenCycles.length === 0) {
       const cno = Number(order.kitchenCycle || 1) || 1;
-      order.kitchenCycles.push({
-        cycle: cno,
-        cycleNo: cno, // keep both to be safe
-        items: [],
-      });
+      order.kitchenCycles.push({ cycle: cno, cycleNo: cno, items: [] });
     }
 
     const activeCycleNo = Number(order.kitchenCycle || 1) || 1;
 
-    // Find the active cycle (support cycle OR cycleNo)
-    let activeCycle = order.kitchenCycles.find((c) => cycleNoOf(c) === activeCycleNo);
+    // find cycle by (cycle OR cycleNo)
+    let activeCycle = order.kitchenCycles.find((c) => {
+      const n = Number(c?.cycle ?? c?.cycleNo);
+      return n === activeCycleNo;
+    });
 
-    // If not found, fallback to max cycle in doc (or create)
     if (!activeCycle) {
-      const maxCycle =
-        order.kitchenCycles
-          .map((c) => cycleNoOf(c))
-          .filter((n) => n !== null)
-          .sort((a, b) => b - a)[0] || activeCycleNo;
-
-      activeCycle = order.kitchenCycles.find((c) => cycleNoOf(c) === maxCycle);
-
-      if (!activeCycle) {
-        activeCycle = { cycle: activeCycleNo, cycleNo: activeCycleNo, items: [] };
-        order.kitchenCycles.push(activeCycle);
-      }
+      activeCycle = { cycle: activeCycleNo, cycleNo: activeCycleNo, items: [] };
+      order.kitchenCycles.push(activeCycle);
     }
 
     if (!Array.isArray(activeCycle.items)) activeCycle.items = [];
@@ -388,12 +393,17 @@ export const updateKdsOrderStatus = async (req, res) => {
         const cur = toCode(it?.lineStatus || "PENDING");
         if (cur === "" || cur === "PENDING") it.lineStatus = "PREPARING";
       }
+      order.kitchenCycle = activeCycleNo;
     } else if (nextCode === "READY") {
       for (const it of activeCycle.items) {
         const cur = toCode(it?.lineStatus || "PENDING");
         if (cur === "PENDING" || cur === "PREPARING") it.lineStatus = "READY";
       }
+      order.status = "Ready";
       order.readyAt = now;
+
+      // ✅ critical for auto-serve
+      order.kitchenCycle = activeCycleNo;
       order.readyAtCycle = activeCycleNo;
     } else if (nextCode === "SERVED") {
       for (const it of activeCycle.items) {
@@ -402,23 +412,27 @@ export const updateKdsOrderStatus = async (req, res) => {
           it.lineStatus = "SERVED";
         }
       }
+      order.status = "Served";
       order.servedAt = now;
+      order.kitchenCycle = activeCycleNo;
     } else if (nextCode === "COMPLETED") {
-      // no line change required
-    } else if (nextCode === "REJECTED" || nextCode === "CANCELLED") {
-      // no line change required
+      order.status = "Completed";
+    } else if (nextCode === "REJECTED") {
+      order.status = "Rejected";
+    } else if (nextCode === "CANCELLED" || nextCode === "CANCELED") {
+      order.status = "Cancelled";
+    } else if (nextCode === "PENDING") {
+      order.status = "Pending";
+    } else {
+      return res.status(400).json({ error: "Invalid status value" });
     }
 
-    // Set label status
-    order.status = nextLabel;
-
-    // Keep overall consistent with cycles if cycles provide meaningful computed state
+    // keep overall consistent if cycles provide signal
     const computed = computeOverallStatusFromCycles(order.kitchenCycles);
     if (computed && !isTerminal(order.status)) {
       order.status = STATUS_CODE_TO_LABEL[computed] || order.status;
     }
 
-    // bump revision
     order.revision = Number(order.revision || 0) + 1;
 
     await order.save();
@@ -431,6 +445,7 @@ export const updateKdsOrderStatus = async (req, res) => {
         revision: order.revision ?? 0,
         kitchenCycle: order.kitchenCycle ?? 1,
         readyAt: order.readyAt ?? null,
+        readyAtCycle: order.readyAtCycle ?? null,
         servedAt: order.servedAt ?? null,
       },
     });
@@ -439,6 +454,130 @@ export const updateKdsOrderStatus = async (req, res) => {
     return res.status(500).json({ error: err.message || "Server error" });
   }
 };
+
+// export const updateKdsOrderStatus = async (req, res) => {
+//   try {
+//     const orderId = String(req.params.id || "").trim();
+//     const { status, branchId } = req.body || {};
+
+//     if (!mongoose.Types.ObjectId.isValid(orderId)) {
+//       return res.status(400).json({ error: "Invalid order id" });
+//     }
+//     if (!branchId) return res.status(400).json({ error: "Missing branchId" });
+
+//     const nextLabel = toLabel(status);
+//     if (!nextLabel) return res.status(400).json({ error: "Invalid status value" });
+
+//     const order = await Order.findOne({
+//       _id: orderId,
+//       branchId: String(branchId).trim(),
+//     });
+
+//     if (!order) return res.status(404).json({ error: "Order not found" });
+
+//     if (!canTransition(order.status, nextLabel)) {
+//       return res.status(400).json({
+//         error: "Invalid status transition",
+//         from: order.status,
+//         to: nextLabel,
+//       });
+//     }
+
+//     // Ensure kitchenCycles exists
+//     if (!Array.isArray(order.kitchenCycles)) order.kitchenCycles = [];
+
+//     // Ensure at least one cycle exists
+//     if (order.kitchenCycles.length === 0) {
+//       const cno = Number(order.kitchenCycle || 1) || 1;
+//       order.kitchenCycles.push({
+//         cycle: cno,
+//         cycleNo: cno, // keep both to be safe
+//         items: [],
+//       });
+//     }
+
+//     const activeCycleNo = Number(order.kitchenCycle || 1) || 1;
+
+//     // Find the active cycle (support cycle OR cycleNo)
+//     let activeCycle = order.kitchenCycles.find((c) => cycleNoOf(c) === activeCycleNo);
+
+//     // If not found, fallback to max cycle in doc (or create)
+//     if (!activeCycle) {
+//       const maxCycle =
+//         order.kitchenCycles
+//           .map((c) => cycleNoOf(c))
+//           .filter((n) => n !== null)
+//           .sort((a, b) => b - a)[0] || activeCycleNo;
+
+//       activeCycle = order.kitchenCycles.find((c) => cycleNoOf(c) === maxCycle);
+
+//       if (!activeCycle) {
+//         activeCycle = { cycle: activeCycleNo, cycleNo: activeCycleNo, items: [] };
+//         order.kitchenCycles.push(activeCycle);
+//       }
+//     }
+
+//     if (!Array.isArray(activeCycle.items)) activeCycle.items = [];
+
+//     const nextCode = toCode(nextLabel);
+//     const now = new Date();
+
+//     if (nextCode === "PREPARING") {
+//       for (const it of activeCycle.items) {
+//         const cur = toCode(it?.lineStatus || "PENDING");
+//         if (cur === "" || cur === "PENDING") it.lineStatus = "PREPARING";
+//       }
+//     } else if (nextCode === "READY") {
+//       for (const it of activeCycle.items) {
+//         const cur = toCode(it?.lineStatus || "PENDING");
+//         if (cur === "PENDING" || cur === "PREPARING") it.lineStatus = "READY";
+//       }
+//       order.readyAt = now;
+//       order.readyAtCycle = activeCycleNo;
+//     } else if (nextCode === "SERVED") {
+//       for (const it of activeCycle.items) {
+//         const cur = toCode(it?.lineStatus || "PENDING");
+//         if (cur === "PENDING" || cur === "PREPARING" || cur === "READY") {
+//           it.lineStatus = "SERVED";
+//         }
+//       }
+//       order.servedAt = now;
+//     } else if (nextCode === "COMPLETED") {
+//       // no line change required
+//     } else if (nextCode === "REJECTED" || nextCode === "CANCELLED") {
+//       // no line change required
+//     }
+
+//     // Set label status
+//     order.status = nextLabel;
+
+//     // Keep overall consistent with cycles if cycles provide meaningful computed state
+//     const computed = computeOverallStatusFromCycles(order.kitchenCycles);
+//     if (computed && !isTerminal(order.status)) {
+//       order.status = STATUS_CODE_TO_LABEL[computed] || order.status;
+//     }
+
+//     // bump revision
+//     order.revision = Number(order.revision || 0) + 1;
+
+//     await order.save();
+
+//     return res.status(200).json({
+//       message: "Status updated",
+//       order: {
+//         id: String(order._id),
+//         status: order.status,
+//         revision: order.revision ?? 0,
+//         kitchenCycle: order.kitchenCycle ?? 1,
+//         readyAt: order.readyAt ?? null,
+//         servedAt: order.servedAt ?? null,
+//       },
+//     });
+//   } catch (err) {
+//     console.error("updateKdsOrderStatus error:", err);
+//     return res.status(500).json({ error: err.message || "Server error" });
+//   }
+// };
 
 
 // import { DateTime } from "luxon";
