@@ -55,6 +55,10 @@ const branchSchema = new mongoose.Schema(
       vatNumber: { type: String, default: "" }, // ✅ NEW
       isVatInclusive: { type: Boolean, default: true }, // ✅ NEW (best place)
 
+      platformFeePerOrder: { type: Number, default: null, min: 0 }, // e.g. 0.010
+      showPlatformFee: { type: Boolean, default: true },            // show line item in checkout/receipt?
+      platformFeePaidByCustomer: { type: Boolean, default: true }, // if false => vendor pays
+
     },
     qrSettings: { qrsAllowed: { type: Boolean, default: true }, noOfQrs: { type: Number, default: 0 } },
     // subscription: { plan: String, expiryDate: Date },

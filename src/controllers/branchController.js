@@ -6,7 +6,6 @@ import { generateBranchId } from "../utils/generateBranchId.js";
 import { generatePublicSlug } from "../utils/generatePublicSlug.js";
 import { touchBranchMenuStampByBizId } from "../utils/touchMenuStamp.js";
 
-
 async function generateUniquePublicSlug(maxTries = 12) {
   for (let i = 0; i < maxTries; i++) {
     const slug = generatePublicSlug();
@@ -61,7 +60,9 @@ export const registerBranch = async (req, res) => {
 
     // ✅ 30 days trial
     const trialDays = 30;
-    const expiryDate = new Date(createdAt.getTime() + trialDays * 24 * 60 * 60 * 1000);
+    const expiryDate = new Date(
+      createdAt.getTime() + trialDays * 24 * 60 * 60 * 1000,
+    );
 
     // plan: allow FE to send plan, otherwise default "trial"
     const plan =
@@ -69,22 +70,22 @@ export const registerBranch = async (req, res) => {
         ? String(subscription.plan).trim()
         : "trial";
 
-        // normalize taxes payload
-const vatPct = taxes?.vatPercentage ?? vendor?.taxes?.vatPercentage ?? 0;
-const svcPct = taxes?.serviceChargePercentage ?? 0;
+    // normalize taxes payload
+    const vatPct = taxes?.vatPercentage ?? vendor?.taxes?.vatPercentage ?? 0;
+    const svcPct = taxes?.serviceChargePercentage ?? 0;
 
-// ✅ take vatNumber from request first, otherwise fallback to vendor.billing.vatNumber
-const vatNumber =
-  (taxes?.vatNumber && String(taxes.vatNumber).trim()) ||
-  (vendor?.billing?.vatNumber && String(vendor.billing.vatNumber).trim()) ||
-  "";
+    // ✅ take vatNumber from request first, otherwise fallback to vendor.billing.vatNumber
+    const vatNumber =
+      (taxes?.vatNumber && String(taxes.vatNumber).trim()) ||
+      (vendor?.billing?.vatNumber && String(vendor.billing.vatNumber).trim()) ||
+      "";
 
-  const isVatInclusive =
+    const isVatInclusive =
       taxes?.isVatInclusive !== undefined
         ? !!taxes.isVatInclusive
-        : (vendor?.taxes?.isVatInclusive !== undefined
-            ? !!vendor.taxes.isVatInclusive
-            : true);
+        : vendor?.taxes?.isVatInclusive !== undefined
+          ? !!vendor.taxes.isVatInclusive
+          : true;
 
     // create branch
     const branch = await Branch.create({
@@ -103,12 +104,15 @@ const vatNumber =
       currency,
       branding,
       taxes: {
-      vatPercentage: Number(vatPct) || 0,
-      serviceChargePercentage: Number(svcPct) || 0,
-      vatNumber, // ✅ NEW
-      isVatInclusive, // ✅ NEW
+        vatPercentage: Number(vatPct) || 0,
+        serviceChargePercentage: Number(svcPct) || 0,
+        vatNumber, // ✅ NEW
+        isVatInclusive, // ✅ NEW
 
-  },
+        platformFeePerOrder: null, // ✅ NEW
+        showPlatformFee: true, // ✅ NEW (or false if you prefer)
+        platformFeePaidByCustomer: false, // ✅ NEW
+      },
       qrSettings,
 
       // ✅ only plan + expiryDate
@@ -120,13 +124,14 @@ const vatNumber =
       updatedAt: createdAt,
     });
 
-    return res.status(201).json({ message: "Branch registered successfully", branch });
+    return res
+      .status(201)
+      .json({ message: "Branch registered successfully", branch });
   } catch (error) {
     console.error("Branch Register Error:", error);
     return res.status(500).json({ message: error.message });
   }
 };
-
 
 // controllers/branchController.js
 export const listBranchesByVendor = async (req, res) => {
@@ -140,12 +145,15 @@ export const listBranchesByVendor = async (req, res) => {
     const branchId = (req.query.branchId || "").toString().trim();
 
     // Pagination
-    const page  = Math.max(parseInt(req.query.page || "1", 10), 1);
-    const limit = Math.min(Math.max(parseInt(req.query.limit || "20", 10), 1), 100);
-    const skip  = (page - 1) * limit;
+    const page = Math.max(parseInt(req.query.page || "1", 10), 1);
+    const limit = Math.min(
+      Math.max(parseInt(req.query.limit || "20", 10), 1),
+      100,
+    );
+    const skip = (page - 1) * limit;
 
     const status = req.query.status?.toString().trim();
-    const q      = req.query.q?.toString().trim();
+    const q = req.query.q?.toString().trim();
 
     let baseFilter = {};
     let resolvedVendorId = vendorId || null;
@@ -161,7 +169,9 @@ export const listBranchesByVendor = async (req, res) => {
         // Branch manager must own at least one branch in this vendor
         const ownsAny = await Branch.exists({ vendorId, userId: uid });
         if (!ownsAny) {
-          return res.status(403).json({ message: "Forbidden: you do not own this vendor" });
+          return res
+            .status(403)
+            .json({ message: "Forbidden: you do not own this vendor" });
         }
         baseFilter = { vendorId, userId: uid };
       }
@@ -189,16 +199,20 @@ export const listBranchesByVendor = async (req, res) => {
 
     if (q) {
       filter.$or = [
-        { branchId:        { $regex: q, $options: "i" } },
-        { publicSlug:      { $regex: q, $options: "i" } },
-        { nameEnglish:     { $regex: q, $options: "i" } },
-        { nameArabic:      { $regex: q, $options: "i" } },
-        { "address.city":  { $regex: q, $options: "i" } },
+        { branchId: { $regex: q, $options: "i" } },
+        { publicSlug: { $regex: q, $options: "i" } },
+        { nameEnglish: { $regex: q, $options: "i" } },
+        { nameArabic: { $regex: q, $options: "i" } },
+        { "address.city": { $regex: q, $options: "i" } },
       ];
     }
 
     const [items, total] = await Promise.all([
-      Branch.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
+      Branch.find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
       Branch.countDocuments(filter),
     ]);
 
@@ -237,14 +251,14 @@ const ensureCanManageBranch = async (req, branch) => {
   return false;
 };
 
-
 export const updateBranchInformation = async (req, res) => {
   try {
     const uid = req.user?.uid;
     if (!uid) return res.status(401).json({ message: "Unauthorized" });
 
     const { branchId } = req.params;
-    if (!branchId) return res.status(400).json({ message: "branchId is required" });
+    if (!branchId)
+      return res.status(400).json({ message: "branchId is required" });
 
     const branch = await loadBranchByPublicId(branchId);
     if (!branch) return res.status(404).json({ message: "Branch not found" });
@@ -260,13 +274,15 @@ export const updateBranchInformation = async (req, res) => {
 
     // Basics
     if (b.nameEnglish !== undefined) branch.nameEnglish = String(b.nameEnglish);
-    if (b.nameArabic  !== undefined) branch.nameArabic  = String(b.nameArabic);
-    if (b.venueType   !== undefined) branch.venueType   = String(b.venueType);
-    if (b.status      !== undefined) branch.status      = String(b.status);
+    if (b.nameArabic !== undefined) branch.nameArabic = String(b.nameArabic);
+    if (b.venueType !== undefined) branch.venueType = String(b.venueType);
+    if (b.status !== undefined) branch.status = String(b.status);
 
     // Service features (replace if provided)
     if (Array.isArray(b.serviceFeatures)) {
-      branch.serviceFeatures = b.serviceFeatures.filter((x) => _SERVICE.has(String(x)));
+      branch.serviceFeatures = b.serviceFeatures.filter((x) =>
+        _SERVICE.has(String(x)),
+      );
     }
 
     // Opening hours: merge days only provided
@@ -282,7 +298,7 @@ export const updateBranchInformation = async (req, res) => {
           if (val.closed === true) {
             branch.openingHours[day] = "Closed";
           } else {
-            const open  = val.open  ?? "09:00";
+            const open = val.open ?? "09:00";
             const close = val.close ?? "22:00";
             branch.openingHours[day] = `${open}-${close}`;
           }
@@ -293,27 +309,34 @@ export const updateBranchInformation = async (req, res) => {
     // Contact
     if (b.contact && typeof b.contact === "object") {
       branch.contact = branch.contact || {};
-      if (b.contact.email !== undefined) branch.contact.email = String(b.contact.email);
-      if (b.contact.phone !== undefined) branch.contact.phone = String(b.contact.phone);
+      if (b.contact.email !== undefined)
+        branch.contact.email = String(b.contact.email);
+      if (b.contact.phone !== undefined)
+        branch.contact.phone = String(b.contact.phone);
     }
 
     // Address (+coordinates)
     if (b.address && typeof b.address === "object") {
       branch.address = branch.address || {};
       const a = b.address;
-      if (a.addressLine  !== undefined) branch.address.addressLine  = String(a.addressLine);
-      if (a.city         !== undefined) branch.address.city         = String(a.city);
-      if (a.state        !== undefined) branch.address.state        = String(a.state);
-      if (a.countryCode  !== undefined) branch.address.countryCode  = String(a.countryCode);
-      if (a.mapPlaceId   !== undefined) branch.address.mapPlaceId   = a.mapPlaceId ? String(a.mapPlaceId) : null;
+      if (a.addressLine !== undefined)
+        branch.address.addressLine = String(a.addressLine);
+      if (a.city !== undefined) branch.address.city = String(a.city);
+      if (a.state !== undefined) branch.address.state = String(a.state);
+      if (a.countryCode !== undefined)
+        branch.address.countryCode = String(a.countryCode);
+      if (a.mapPlaceId !== undefined)
+        branch.address.mapPlaceId = a.mapPlaceId ? String(a.mapPlaceId) : null;
 
       if (a.coordinates && typeof a.coordinates === "object") {
         branch.address.coordinates = branch.address.coordinates || {};
         if (a.coordinates.lat !== undefined) {
-          branch.address.coordinates.lat = a.coordinates.lat === null ? null : Number(a.coordinates.lat);
+          branch.address.coordinates.lat =
+            a.coordinates.lat === null ? null : Number(a.coordinates.lat);
         }
         if (a.coordinates.lng !== undefined) {
-          branch.address.coordinates.lng = a.coordinates.lng === null ? null : Number(a.coordinates.lng);
+          branch.address.coordinates.lng =
+            a.coordinates.lng === null ? null : Number(a.coordinates.lng);
         }
       }
     }
@@ -325,38 +348,56 @@ export const updateBranchInformation = async (req, res) => {
     // Branding
     if (b.branding && typeof b.branding === "object") {
       branch.branding = branch.branding || {};
-      if (b.branding.logo !== undefined) branch.branding.logo = b.branding.logo ? String(b.branding.logo) : null;
+      if (b.branding.logo !== undefined)
+        branch.branding.logo = b.branding.logo ? String(b.branding.logo) : null;
       if (b.branding.coverBannerLogo !== undefined) {
-        branch.branding.coverBannerLogo = b.branding.coverBannerLogo ? String(b.branding.coverBannerLogo) : null;
+        branch.branding.coverBannerLogo = b.branding.coverBannerLogo
+          ? String(b.branding.coverBannerLogo)
+          : null;
       }
       if (b.branding.splashScreenEnabled !== undefined) {
-    branch.branding.splashScreenEnabled = !!b.branding.splashScreenEnabled;
-  }
+        branch.branding.splashScreenEnabled = !!b.branding.splashScreenEnabled;
+      }
     }
 
     // Taxes
     if (b.taxes && typeof b.taxes === "object") {
       branch.taxes = branch.taxes || {};
-      if (b.taxes.vatPercentage !== undefined) branch.taxes.vatPercentage = Number(b.taxes.vatPercentage);
+      if (b.taxes.vatPercentage !== undefined)
+        branch.taxes.vatPercentage = Number(b.taxes.vatPercentage);
       if (b.taxes.serviceChargePercentage !== undefined) {
-        branch.taxes.serviceChargePercentage = Number(b.taxes.serviceChargePercentage);
+        branch.taxes.serviceChargePercentage = Number(
+          b.taxes.serviceChargePercentage,
+        );
       }
       if (b.taxes.isVatInclusive !== undefined) {
-      branch.taxes.isVatInclusive = !!b.taxes.isVatInclusive;
+        branch.taxes.isVatInclusive = !!b.taxes.isVatInclusive;
+      }
+      if (b.taxes.vatPercentage !== undefined) {
+        const n = Number(b.taxes.vatPercentage);
+        branch.taxes.vatPercentage = Number.isFinite(n) ? n : 0;
+      }
+
+      if (b.taxes.serviceChargePercentage !== undefined) {
+        const n = Number(b.taxes.serviceChargePercentage);
+        branch.taxes.serviceChargePercentage = Number.isFinite(n) ? n : 0;
       }
     }
 
     // QR Settings
     if (b.qrSettings && typeof b.qrSettings === "object") {
       branch.qrSettings = branch.qrSettings || {};
-      if (b.qrSettings.qrsAllowed !== undefined) branch.qrSettings.qrsAllowed = !!b.qrSettings.qrsAllowed;
-      if (b.qrSettings.noOfQrs !== undefined) branch.qrSettings.noOfQrs = Number(b.qrSettings.noOfQrs);
+      if (b.qrSettings.qrsAllowed !== undefined)
+        branch.qrSettings.qrsAllowed = !!b.qrSettings.qrsAllowed;
+      if (b.qrSettings.noOfQrs !== undefined)
+        branch.qrSettings.noOfQrs = Number(b.qrSettings.noOfQrs);
     }
 
     // Subscription
     if (b.subscription && typeof b.subscription === "object") {
       branch.subscription = branch.subscription || {};
-      if (b.subscription.plan !== undefined) branch.subscription.plan = String(b.subscription.plan);
+      if (b.subscription.plan !== undefined)
+        branch.subscription.plan = String(b.subscription.plan);
       if (b.subscription.expiryDate !== undefined) {
         branch.subscription.expiryDate = b.subscription.expiryDate
           ? new Date(b.subscription.expiryDate)
@@ -393,7 +434,9 @@ export const getBranchMenuSections = async (req, res) => {
     }
 
     const sections = [...(branch.menuSections || [])].sort(
-      (a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0) || a.nameEnglish.localeCompare(b.nameEnglish)
+      (a, b) =>
+        (a.sortOrder ?? 0) - (b.sortOrder ?? 0) ||
+        a.nameEnglish.localeCompare(b.nameEnglish),
     );
 
     return res.status(200).json({
@@ -427,7 +470,9 @@ export const upsertBranchMenuSection = async (req, res) => {
     if (!nameEnglish || !nameArabic) {
       const mt = await MenuType.findOne({ key }).lean();
       if (!mt && !nameEnglish) {
-        return res.status(400).json({ message: "Unknown key and nameEnglish is missing" });
+        return res
+          .status(400)
+          .json({ message: "Unknown key and nameEnglish is missing" });
       }
       nameEnglish = nameEnglish ?? mt?.nameEnglish ?? key;
       nameArabic = nameArabic ?? mt?.nameArabic ?? "";
@@ -463,13 +508,11 @@ export const upsertBranchMenuSection = async (req, res) => {
     await branch.save();
 
     const section = branch.menuSections.find((s) => s.key === key);
-    return res
-      .status(created ? 201 : 200)
-      .json({
-        message: created ? "Menu section enabled" : "Menu section updated",
-        branchId: branch.branchId,
-        section,
-      });
+    return res.status(created ? 201 : 200).json({
+      message: created ? "Menu section enabled" : "Menu section updated",
+      branchId: branch.branchId,
+      section,
+    });
   } catch (e) {
     console.error("upsertBranchMenuSection error:", e);
     return res.status(500).json({ message: e.message });
