@@ -111,7 +111,7 @@ export const registerBranch = async (req, res) => {
 
         platformFeePerOrder: null, // ✅ NEW
         showPlatformFee: true, // ✅ NEW (or false if you prefer)
-        platformFeePaidByCustomer: false, // ✅ NEW
+        platformFeePaidByCustomer: true, // ✅ NEW
       },
       qrSettings,
 
@@ -361,28 +361,74 @@ export const updateBranchInformation = async (req, res) => {
     }
 
     // Taxes
-    if (b.taxes && typeof b.taxes === "object") {
-      branch.taxes = branch.taxes || {};
-      if (b.taxes.vatPercentage !== undefined)
-        branch.taxes.vatPercentage = Number(b.taxes.vatPercentage);
-      if (b.taxes.serviceChargePercentage !== undefined) {
-        branch.taxes.serviceChargePercentage = Number(
-          b.taxes.serviceChargePercentage,
-        );
-      }
-      if (b.taxes.isVatInclusive !== undefined) {
-        branch.taxes.isVatInclusive = !!b.taxes.isVatInclusive;
-      }
-      if (b.taxes.vatPercentage !== undefined) {
-        const n = Number(b.taxes.vatPercentage);
-        branch.taxes.vatPercentage = Number.isFinite(n) ? n : 0;
-      }
+    // Taxes
+if (b.taxes && typeof b.taxes === "object") {
+  branch.taxes = branch.taxes || {};
 
-      if (b.taxes.serviceChargePercentage !== undefined) {
-        const n = Number(b.taxes.serviceChargePercentage);
-        branch.taxes.serviceChargePercentage = Number.isFinite(n) ? n : 0;
-      }
-    }
+  // Helpers (prevents "false" string => true)
+  const toBool = (v) => {
+    if (v === true || v === false) return v;
+    if (typeof v === "string") return v.toLowerCase() === "true";
+    if (typeof v === "number") return v === 1;
+    return false;
+  };
+
+  // VAT %
+  if (b.taxes.vatPercentage !== undefined) {
+    const n = Number(b.taxes.vatPercentage);
+    branch.taxes.vatPercentage = Number.isFinite(n) ? n : 0;
+  }
+
+  // Service %
+  if (b.taxes.serviceChargePercentage !== undefined) {
+    const n = Number(b.taxes.serviceChargePercentage);
+    branch.taxes.serviceChargePercentage = Number.isFinite(n) ? n : 0;
+  }
+
+  // Inclusive VAT
+  if (b.taxes.isVatInclusive !== undefined) {
+    branch.taxes.isVatInclusive = toBool(b.taxes.isVatInclusive);
+  }
+
+  // ✅ Show/Hide platform fee line item (independent)
+  if (b.taxes.showPlatformFee !== undefined) {
+    branch.taxes.showPlatformFee = toBool(b.taxes.showPlatformFee);
+  }
+
+  // ✅ Who pays platform fee (independent)
+  if (b.taxes.platformFeePaidByCustomer !== undefined) {
+    branch.taxes.platformFeePaidByCustomer = toBool(
+      b.taxes.platformFeePaidByCustomer
+    );
+  }
+
+  // ❌ Do NOT allow vendor to change platformFeePerOrder
+  // if (b.taxes.platformFeePerOrder !== undefined) { ... }
+}
+
+
+    // if (b.taxes && typeof b.taxes === "object") {
+    //   branch.taxes = branch.taxes || {};
+    //   if (b.taxes.vatPercentage !== undefined)
+    //     branch.taxes.vatPercentage = Number(b.taxes.vatPercentage);
+    //   if (b.taxes.serviceChargePercentage !== undefined) {
+    //     branch.taxes.serviceChargePercentage = Number(
+    //       b.taxes.serviceChargePercentage,
+    //     );
+    //   }
+    //   if (b.taxes.isVatInclusive !== undefined) {
+    //     branch.taxes.isVatInclusive = !!b.taxes.isVatInclusive;
+    //   }
+    //   if (b.taxes.vatPercentage !== undefined) {
+    //     const n = Number(b.taxes.vatPercentage);
+    //     branch.taxes.vatPercentage = Number.isFinite(n) ? n : 0;
+    //   }
+
+    //   if (b.taxes.serviceChargePercentage !== undefined) {
+    //     const n = Number(b.taxes.serviceChargePercentage);
+    //     branch.taxes.serviceChargePercentage = Number.isFinite(n) ? n : 0;
+    //   }
+    // }
 
     // QR Settings
     if (b.qrSettings && typeof b.qrSettings === "object") {
