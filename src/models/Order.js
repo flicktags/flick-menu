@@ -82,8 +82,13 @@ const OrderSchema = new mongoose.Schema(
       ],
       default: [],
     },
+
+    // ---- BUSINESS DAY SNAPSHOT (Operational day) ----
+    businessDayLocal: { type: String, index: true }, // "YYYY-MM-DD" in branch TZ
+    businessDayStartUTC: { type: Date, index: true },
+    businessDayEndUTC: { type: Date, index: true },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 // Helpful indexes for common queries
@@ -99,6 +104,9 @@ OrderSchema.index({ branchId: 1, revision: -1 });
 OrderSchema.index({ branchId: 1, status: 1, readyAt: 1 });
 OrderSchema.index({ branchId: 1, status: 1, servedAt: 1 });
 OrderSchema.index({ branchId: 1, readyAtCycle: 1, kitchenCycle: 1 });
+OrderSchema.index({ branchId: 1, businessDayLocal: 1, createdAt: -1 });
+OrderSchema.index({ branchId: 1, businessDayStartUTC: 1, businessDayEndUTC: 1 });
+
 
 export default mongoose.model("Order", OrderSchema);
 
@@ -244,10 +252,8 @@ export default mongoose.model("Order", OrderSchema);
 
 // export default mongoose.model("Order", OrderSchema);
 
-
 // // src/models/Order.js
 // import mongoose from "mongoose";
-
 
 // const OrderSchema = new mongoose.Schema(
 //   {
@@ -300,7 +306,7 @@ export default mongoose.model("Order", OrderSchema);
 //     vendorId: { type: String, required: true, index: true }, // for ownership + summaries
 //     tokenNumber: { type: Number, index: true },              // small per-day token shown to customer
 //     clientCreatedAt: { type: Date, default: null, index: true }, // parsed from ISO sent by client
-//     clientTzOffsetMinutes: { type: Number, default: null }, 
+//     clientTzOffsetMinutes: { type: Number, default: null },
 
 //     revision: { type: Number, default: 0, index: true }, // increments on meaningful changes (add-more, status moves)
 //     kitchenCycle: { type: Number, default: 1, index: true }, // “round” counter when reopened after SERVED
@@ -337,6 +343,4 @@ export default mongoose.model("Order", OrderSchema);
 // OrderSchema.index({ branchId: 1, status: 1, readyAt: 1 });
 // OrderSchema.index({ branchId: 1, status: 1, servedAt: 1 });
 
-
 // export default mongoose.model("Order", OrderSchema);
-
