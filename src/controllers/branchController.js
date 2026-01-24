@@ -107,7 +107,7 @@ export const registerBranch = async (req, res) => {
     // 30 days trial
     const trialDays = 30;
     const expiryDate = new Date(
-      createdAt.getTime() + trialDays * 24 * 60 * 60 * 1000
+      createdAt.getTime() + trialDays * 24 * 60 * 60 * 1000,
     );
 
     // plan: allow FE to send plan, otherwise default "trial"
@@ -129,8 +129,8 @@ export const registerBranch = async (req, res) => {
       taxes?.isVatInclusive !== undefined
         ? !!taxes.isVatInclusive
         : vendor?.taxes?.isVatInclusive !== undefined
-        ? !!vendor.taxes.isVatInclusive
-        : true;
+          ? !!vendor.taxes.isVatInclusive
+          : true;
 
     // ✅ NEW: Force customization defaults on register
     // (Even if FE sends something, you asked to default false for now)
@@ -206,7 +206,7 @@ export const listBranchesByVendor = async (req, res) => {
     const page = Math.max(parseInt(req.query.page || "1", 10), 1);
     const limit = Math.min(
       Math.max(parseInt(req.query.limit || "20", 10), 1),
-      100
+      100,
     );
     const skip = (page - 1) * limit;
 
@@ -261,7 +261,11 @@ export const listBranchesByVendor = async (req, res) => {
     }
 
     const [items, total] = await Promise.all([
-      Branch.find(filter).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
+      Branch.find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
       Branch.countDocuments(filter),
     ]);
 
@@ -310,7 +314,7 @@ export const updateBranchInformation = async (req, res) => {
     // Service features
     if (Array.isArray(b.serviceFeatures)) {
       branch.serviceFeatures = b.serviceFeatures.filter((x) =>
-        _SERVICE.has(String(x))
+        _SERVICE.has(String(x)),
       );
     }
 
@@ -413,7 +417,7 @@ export const updateBranchInformation = async (req, res) => {
 
       if (b.taxes.platformFeePaidByCustomer !== undefined) {
         branch.taxes.platformFeePaidByCustomer = toBool(
-          b.taxes.platformFeePaidByCustomer
+          b.taxes.platformFeePaidByCustomer,
         );
       }
 
@@ -441,7 +445,15 @@ export const updateBranchInformation = async (req, res) => {
       }
     }
 
-   
+    // ❌ remove this entire block from updateBranchInformation
+    if (b.customization && typeof b.customization === "object") {
+      branch.customization = branch.customization || {};
+      if (b.customization.isClassicMenu !== undefined) {
+        branch.customization.isClassicMenu = toBool(
+          b.customization.isClassicMenu,
+        );
+      }
+    }
 
     await branch.save();
 
@@ -474,7 +486,7 @@ export const getBranchMenuSections = async (req, res) => {
     const sections = [...(branch.menuSections || [])].sort(
       (a, b) =>
         (a.sortOrder ?? 0) - (b.sortOrder ?? 0) ||
-        a.nameEnglish.localeCompare(b.nameEnglish)
+        a.nameEnglish.localeCompare(b.nameEnglish),
     );
 
     return res.status(200).json({
@@ -599,7 +611,8 @@ export const getBranchCustomization = async (req, res) => {
     if (!uid) return res.status(401).json({ message: "Unauthorized" });
 
     const { branchId } = req.params;
-    if (!branchId) return res.status(400).json({ message: "branchId is required" });
+    if (!branchId)
+      return res.status(400).json({ message: "branchId is required" });
 
     const branch = await loadBranchByPublicId(branchId);
     if (!branch) return res.status(404).json({ message: "Branch not found" });
@@ -629,7 +642,8 @@ export const patchBranchCustomization = async (req, res) => {
     if (!uid) return res.status(401).json({ message: "Unauthorized" });
 
     const { branchId } = req.params;
-    if (!branchId) return res.status(400).json({ message: "branchId is required" });
+    if (!branchId)
+      return res.status(400).json({ message: "branchId is required" });
 
     const branch = await loadBranchByPublicId(branchId);
     if (!branch) return res.status(404).json({ message: "Branch not found" });
@@ -644,12 +658,15 @@ export const patchBranchCustomization = async (req, res) => {
     }
 
     // ✅ Only accept customization object
-    const c = (b.customization && typeof b.customization === "object")
-      ? b.customization
-      : null;
+    const c =
+      b.customization && typeof b.customization === "object"
+        ? b.customization
+        : null;
 
     if (!c) {
-      return res.status(400).json({ message: "customization object is required" });
+      return res
+        .status(400)
+        .json({ message: "customization object is required" });
     }
 
     // Ensure object exists (for older branches)
@@ -697,8 +714,6 @@ export const patchBranchCustomization = async (req, res) => {
     return res.status(500).json({ message: err.message });
   }
 };
-
-
 
 // import MenuType from "../models/MenuType.js";
 // import { generateBranchId } from "../utils/generateBranchId.js";
@@ -1104,7 +1119,6 @@ export const patchBranchCustomization = async (req, res) => {
 //   // ❌ Do NOT allow vendor to change platformFeePerOrder
 //   // if (b.taxes.platformFeePerOrder !== undefined) { ... }
 // }
-
 
 //     // if (b.taxes && typeof b.taxes === "object") {
 //     //   branch.taxes = branch.taxes || {};
