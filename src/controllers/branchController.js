@@ -441,14 +441,7 @@ export const updateBranchInformation = async (req, res) => {
       }
     }
 
-    // ✅ NEW: Customization (for now only isClassicMenu)
-    // Allow update via API (optional). If you want to block it for now, tell me.
-    if (b.customization && typeof b.customization === "object") {
-      branch.customization = branch.customization || {};
-      if (b.customization.isClassicMenu !== undefined) {
-        branch.customization.isClassicMenu = toBool(b.customization.isClassicMenu);
-      }
-    }
+   
 
     await branch.save();
 
@@ -599,6 +592,113 @@ export const disableOrRemoveBranchMenuSection = async (req, res) => {
     return res.status(500).json({ message: e.message });
   }
 };
+
+export const getBranchCustomization = async (req, res) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ message: "Unauthorized" });
+
+    const { branchId } = req.params;
+    if (!branchId) return res.status(400).json({ message: "branchId is required" });
+
+    const branch = await loadBranchByPublicId(branchId);
+    if (!branch) return res.status(404).json({ message: "Branch not found" });
+
+    if (!(await ensureCanManageBranch(req, branch))) {
+      return res.status(403).json({ message: "Forbidden" });
+    }
+
+    // Ensure defaults if missing in older records
+    const customization = branch.customization || { isClassicMenu: false };
+
+    return res.json({
+      message: "Customization fetched",
+      buildTag: "customization-route-v1", // ✅ helps you confirm deployment
+      branchId: branch.branchId,
+      customization,
+    });
+  } catch (err) {
+    console.error("getBranchCustomization error:", err);
+    return res.status(500).json({ message: err.message });
+  }
+};
+
+export const patchBranchCustomization = async (req, res) => {
+  try {
+    const uid = req.user?.uid;
+    if (!uid) return res.status(401).json({ message: "Unauthorized" });
+
+    const { branchId } = req.params;
+    if (!branchId) return res.status(400).json({ message: "branchId is required" });
+
+    const branch = await loadBranchByPublicId(branchId);
+    if (!branch) return res.status(404).json({ message: "Branch not found" });
+
+    if (!(await ensureCanManageBranch(req, branch))) {
+      return res.status(403).json({ message: "Forbidden" });
+    }
+
+    const b = req.body || {};
+    if (!b || typeof b !== "object") {
+      return res.status(400).json({ message: "Invalid body" });
+    }
+
+    // ✅ Only accept customization object
+    const c = (b.customization && typeof b.customization === "object")
+      ? b.customization
+      : null;
+
+    if (!c) {
+      return res.status(400).json({ message: "customization object is required" });
+    }
+
+    // Ensure object exists (for older branches)
+    if (!branch.customization) branch.customization = { isClassicMenu: false };
+
+    // ✅ Update allowed keys (future: add more keys here)
+    let changed = false;
+
+    if (c.isClassicMenu !== undefined) {
+      const v = toBool(c.isClassicMenu);
+      if (branch.customization.isClassicMenu !== v) {
+        // Use set() so Mongoose definitely tracks nested change
+        branch.set("customization.isClassicMenu", v);
+        changed = true;
+      }
+    }
+
+    if (!changed) {
+      return res.json({
+        message: "No customization changes",
+        buildTag: "customization-route-v1",
+        branchId: branch.branchId,
+        customization: branch.customization,
+      });
+    }
+
+    // ✅ Force mark modified (belt + suspenders)
+    branch.markModified("customization");
+
+    await branch.save();
+
+    // ✅ IMPORTANT: bump menu stamp so customer cached view knows something changed
+    await touchBranchMenuStampByBizId(branch.branchId);
+
+    const updated = await Branch.findById(branch._id).lean();
+
+    return res.json({
+      message: "Customization updated",
+      buildTag: "customization-route-v1",
+      branch: updated,
+      customization: updated?.customization ?? null,
+    });
+  } catch (err) {
+    console.error("patchBranchCustomization error:", err);
+    return res.status(500).json({ message: err.message });
+  }
+};
+
+
 
 // import MenuType from "../models/MenuType.js";
 // import { generateBranchId } from "../utils/generateBranchId.js";

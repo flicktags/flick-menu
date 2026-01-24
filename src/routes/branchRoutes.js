@@ -4,7 +4,9 @@ import { registerBranch,
   getBranchMenuSections,
   upsertBranchMenuSection,
   disableOrRemoveBranchMenuSection, 
-  updateBranchInformation} from "../controllers/branchController.js";
+  updateBranchInformation,
+  getBranchCustomization,
+  patchBranchCustomization} from "../controllers/branchController.js";
 import { verifyFirebaseToken } from '../middlewares/authMiddleware.js'
 
 
@@ -15,6 +17,10 @@ branchRouter.get("/vendor/:vendorId", verifyFirebaseToken, listBranchesByVendor)
 // Also handy: GET /api/branches?vendorId=V000023
 branchRouter.get("/", verifyFirebaseToken, listBranchesByVendor);
 branchRouter.patch("/:branchId", verifyFirebaseToken, updateBranchInformation); // <-- NEW
+
+// ✅ Customization (separate, future proof)
+branchRouter.get("/:branchId/customization", verifyFirebaseToken, getBranchCustomization);
+branchRouter.patch("/:branchId/customization", verifyFirebaseToken, patchBranchCustomization);
 
 // Menu sections per-branch
 branchRouter.get("/:branchId/menu/sections", verifyFirebaseToken, getBranchMenuSections);
