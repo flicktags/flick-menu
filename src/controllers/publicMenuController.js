@@ -17,7 +17,7 @@ function entriesOf(maybeMapOrObj) {
 
 // Force codes to 01..08 and return a plain object
 function normalizeItemTypeDesignMap(raw) {
-  const allowed = new Set(["01","02","03","04","05","06","07","08"]);
+  const allowed = new Set(["01", "02", "03", "04", "05", "06", "07", "08"]);
   const out = {};
   for (const [k, v] of entriesOf(raw)) {
     const vv = String(v || "").padStart(2, "0");
@@ -35,12 +35,15 @@ function buildPublicBranchInfo(branch) {
     nameArabic: branch?.nameArabic ?? null,
     timeZone: branch?.timeZone ?? null,
     currency: branch?.currency ?? null,
-    serviceFeatures: Array.isArray(branch?.serviceFeatures) ? branch.serviceFeatures : [],
+    serviceFeatures: Array.isArray(branch?.serviceFeatures)
+      ? branch.serviceFeatures
+      : [],
     openingHours: branch?.openingHours ?? null,
     contact: branch?.contact ?? null,
     taxes: {
       vatPercentage: Number(branch?.taxes?.vatPercentage ?? 0) || 0,
-      serviceChargePercentage: Number(branch?.taxes?.serviceChargePercentage ?? 0) || 0,
+      serviceChargePercentage:
+        Number(branch?.taxes?.serviceChargePercentage ?? 0) || 0,
       vatNumber: (branch?.taxes?.vatNumber ?? "").toString(),
       // default TRUE if missing
       isVatInclusive: branch?.taxes?.isVatInclusive !== false,
@@ -50,6 +53,9 @@ function buildPublicBranchInfo(branch) {
       logo: branch?.branding?.logo ?? null,
       coverBannerLogo: branch?.branding?.coverBannerLogo ?? null,
       splashScreenEnabled: branch?.branding?.splashScreenEnabled === true,
+    },
+     customization: {
+      isClassicMenu: branch?.customization?.isClassicMenu === true,
     },
   };
 }
@@ -64,7 +70,9 @@ async function buildMetaForBranch(branch) {
 
   if (branch?.vendorId) {
     const v = await Vendor.findOne({ vendorId: branch.vendorId })
-      .select("vendorId billing.vatNumber taxes.vatPercentage settings.priceIncludesVat")
+      .select(
+        "vendorId billing.vatNumber taxes.vatPercentage settings.priceIncludesVat",
+      )
       .lean();
 
     // if (v) {
@@ -84,19 +92,21 @@ async function buildMetaForBranch(branch) {
     if (v) {
       // Prefer BRANCH vat percentage if present; otherwise fallback to vendor vatPercentage
       const branchVatPct =
-        typeof branch?.taxes?.vatPercentage === "number" ? branch.taxes.vatPercentage : null;
+        typeof branch?.taxes?.vatPercentage === "number"
+          ? branch.taxes.vatPercentage
+          : null;
 
       const vatPct =
         branchVatPct !== null
           ? branchVatPct
           : typeof v?.taxes?.vatPercentage === "number"
-          ? v.taxes.vatPercentage
-          : null;
+            ? v.taxes.vatPercentage
+            : null;
 
       vendor = {
         vendorId: v.vendorId || null,
         // Prefer BRANCH vatNumber if present; otherwise fallback to vendor billing vatNumber
-        vatNumber: (branch?.taxes?.vatNumber ?? v?.billing?.vatNumber ?? null),
+        vatNumber: branch?.taxes?.vatNumber ?? v?.billing?.vatNumber ?? null,
         vatRate: vatPct !== null ? vatPct / 100 : null, // 10 -> 0.10
       };
 
@@ -106,15 +116,17 @@ async function buildMetaForBranch(branch) {
         settings = { priceIncludesVat: v.settings.priceIncludesVat };
       }
     }
-  
   }
   return { currency, vendor, settings };
 }
 
 function buildMenuStamp(branch) {
   return {
-    menuVersion: typeof branch?.menuVersion === "number" ? branch.menuVersion : 1,
-    menuUpdatedAt: branch?.menuUpdatedAt ? new Date(branch.menuUpdatedAt).toISOString() : null,
+    menuVersion:
+      typeof branch?.menuVersion === "number" ? branch.menuVersion : 1,
+    menuUpdatedAt: branch?.menuUpdatedAt
+      ? new Date(branch.menuUpdatedAt).toISOString()
+      : null,
   };
 }
 
@@ -145,7 +157,9 @@ function parseSeatFromQr({ type, number }) {
 async function resolveContext(req) {
   const qrId = String(req.query?.qrId || req.query?.qr || "").trim();
   const branchBizId = String(req.query?.branch || "").trim(); // optional when qrId given
-  const type = String(req.query?.type || "").trim().toLowerCase(); // optional
+  const type = String(req.query?.type || "")
+    .trim()
+    .toLowerCase(); // optional
   const number = String(req.query?.number || "").trim(); // optional
 
   // --- Premium (QR) path
@@ -201,14 +215,14 @@ async function resolveContext(req) {
     const seat = parseSeatFromQr({ type: qr.type, number: qr.number });
     const qrPublic = {
       qrId: qr.qrId,
-      type: qr.type,              // "table" | "room"
-      number: qr.number,          // e.g., "table-12"
+      type: qr.type, // "table" | "room"
+      number: qr.number, // e.g., "table-12"
       label: qr.label ?? undefined,
       active: qr.active !== false,
       vendorId: qr.vendorId ?? undefined,
       branchObjectId: String(qr.branchId || ""),
-      branchId: branch.branchId,  // business id (BR-xxxxx)
-      seat,                       // { kind, index }
+      branchId: branch.branchId, // business id (BR-xxxxx)
+      seat, // { kind, index }
     };
 
     return { branch, qr: qrPublic };
@@ -270,7 +284,6 @@ async function resolveContext(req) {
 //   }
 // };
 
-
 // GET /api/public/menu/sections?branch=BR-000005
 // Optional: ?stampOnly=1  -> returns only menuStamp + serverTime
 export const getPublicMenuTypes = async (req, res) => {
@@ -284,6 +297,8 @@ export const getPublicMenuTypes = async (req, res) => {
         branchId: branch.branchId,
         menuStamp: buildMenuStamp(branch),
         serverTime: new Date().toISOString(),
+            branch: { customization: { isClassicMenu: branch?.customization?.isClassicMenu === true } },
+
       };
       if (qr) resp.qr = qr;
       return res.json(resp);
@@ -313,7 +328,7 @@ export const getPublicMenuTypes = async (req, res) => {
         serviceFeatures: branch.serviceFeatures || [],
         openingHours: branch.openingHours || {},
         contact: branch.contact || {},
-         // ✅ NEW
+        // ✅ NEW
         branding: {
           logo: branch.branding?.logo ?? null,
           coverBannerLogo: branch.branding?.coverBannerLogo ?? null,
@@ -321,6 +336,9 @@ export const getPublicMenuTypes = async (req, res) => {
         },
         taxes: {
           isVatInclusive: branch?.taxes?.isVatInclusive !== false, // default true
+        },
+        customization: {
+          isClassicMenu: branch?.customization?.isClassicMenu === true,
         },
       },
       sections,
@@ -333,7 +351,9 @@ export const getPublicMenuTypes = async (req, res) => {
     return res.json(resp);
   } catch (err) {
     const status = err.status || 500;
-    return res.status(status).json({ message: err.message || "Failed to load sections" });
+    return res
+      .status(status)
+      .json({ message: err.message || "Failed to load sections" });
   }
 };
 
@@ -375,7 +395,9 @@ export const getPublicMenu = async (req, res) => {
     return res.status(200).json(resp);
   } catch (err) {
     const status = err.status || 500;
-    return res.status(status).json({ message: err.message || "Failed to load menu" });
+    return res
+      .status(status)
+      .json({ message: err.message || "Failed to load menu" });
   }
 };
 
@@ -390,7 +412,10 @@ export const getPublicSectionItems = async (req, res) => {
     }
 
     const page = Math.max(1, parseInt(String(req.query?.page || "1"), 10));
-    const limit = Math.min(100, Math.max(1, parseInt(String(req.query?.limit || "20"), 10)));
+    const limit = Math.min(
+      100,
+      Math.max(1, parseInt(String(req.query?.limit || "20"), 10)),
+    );
     const skip = (page - 1) * limit;
 
     const { branch, qr } = await resolveContext(req);
@@ -412,7 +437,7 @@ export const getPublicSectionItems = async (req, res) => {
           "nameEnglish nameArabic description descriptionArabic imageUrl videoUrl " +
           "allergens tags isFeatured isActive isAvailable isSpicy " +
           "calories sku preparationTimeInMinutes ingredients addons " +
-          "isSizedBased sizes fixedPrice offeredPrice discount createdAt updatedAt"
+          "isSizedBased sizes fixedPrice offeredPrice discount createdAt updatedAt",
       )
       .lean();
 
@@ -434,7 +459,9 @@ export const getPublicSectionItems = async (req, res) => {
     return res.status(200).json(resp);
   } catch (err) {
     const status = err.status || 500;
-    return res.status(status).json({ message: err.message || "Failed to load items" });
+    return res
+      .status(status)
+      .json({ message: err.message || "Failed to load items" });
   }
 };
 
@@ -448,11 +475,19 @@ export const getPublicSectionItemsGrouped = async (req, res) => {
       return res.status(400).json({ message: "sectionKey is required" });
     }
 
-    const hardCap = Math.min(1000, Math.max(1, parseInt(String(req.query?.limit || "1000"), 10)));
+    const hardCap = Math.min(
+      1000,
+      Math.max(1, parseInt(String(req.query?.limit || "1000"), 10)),
+    );
 
     const { branch, qr } = await resolveContext(req);
 
-    const query = { branchId: branch.branchId, sectionKey, isActive: true, isAvailable: true };
+    const query = {
+      branchId: branch.branchId,
+      sectionKey,
+      isActive: true,
+      isAvailable: true,
+    };
 
     const items = await MenuItem.find(query)
       .sort({ sortOrder: 1, nameEnglish: 1 })
@@ -462,7 +497,8 @@ export const getPublicSectionItemsGrouped = async (req, res) => {
     // Group by itemType (fallback to "UNCATEGORIZED")
     const map = new Map();
     for (const it of items) {
-      const key = (it.itemType && String(it.itemType).trim()) || "UNCATEGORIZED";
+      const key =
+        (it.itemType && String(it.itemType).trim()) || "UNCATEGORIZED";
       if (!map.has(key)) map.set(key, []);
       map.get(key).push(it);
     }
@@ -490,7 +526,9 @@ export const getPublicSectionItemsGrouped = async (req, res) => {
     return res.json(resp);
   } catch (err) {
     const status = err.status || 500;
-    return res.status(status).json({ message: err.message || "Failed to load grouped items" });
+    return res
+      .status(status)
+      .json({ message: err.message || "Failed to load grouped items" });
   }
 };
 
@@ -501,12 +539,14 @@ export const getPublicBranchCatalog = async (req, res) => {
   try {
     const maxPerSection = Math.min(
       2000,
-      Math.max(1, parseInt(String(req.query?.maxPerSection || "1000"), 10))
+      Math.max(1, parseInt(String(req.query?.maxPerSection || "1000"), 10)),
     );
 
     const { branch, qr } = await resolveContext(req);
 
-    const enabledSections = (branch.menuSections || []).filter((s) => s.isEnabled === true);
+    const enabledSections = (branch.menuSections || []).filter(
+      (s) => s.isEnabled === true,
+    );
 
     const sections = await Promise.all(
       enabledSections.map(async (s) => {
@@ -523,7 +563,8 @@ export const getPublicBranchCatalog = async (req, res) => {
         // Group by itemType
         const gmap = new Map();
         for (const it of items) {
-          const key = (it.itemType && String(it.itemType).trim()) || "UNCATEGORIZED";
+          const key =
+            (it.itemType && String(it.itemType).trim()) || "UNCATEGORIZED";
           if (!gmap.has(key)) gmap.set(key, []);
           gmap.get(key).push(it);
         }
@@ -543,7 +584,7 @@ export const getPublicBranchCatalog = async (req, res) => {
           itemCount: s.itemCount ?? undefined,
           itemTypes,
         };
-      })
+      }),
     );
 
     const meta = await buildMetaForBranch(branch);
@@ -575,7 +616,9 @@ export const getPublicBranchCatalog = async (req, res) => {
     return res.json(resp);
   } catch (err) {
     const status = err.status || 500;
-    return res.status(status).json({ message: err.message || "Failed to load catalog" });
+    return res
+      .status(status)
+      .json({ message: err.message || "Failed to load catalog" });
   }
 };
 
@@ -588,7 +631,10 @@ export const getPublicGroupedTree = async (req, res) => {
     const sectionKey = String(req.query?.sectionKey || "").trim(); // optional
     const rawCode = String(req.query?.foodCategoryGroupCode || "").trim();
     const codeFilter = rawCode ? rawCode.toUpperCase() : null;
-    const hardCap = Math.min(20000, Math.max(1, parseInt(String(req.query?.limit || "5000"), 10)));
+    const hardCap = Math.min(
+      20000,
+      Math.max(1, parseInt(String(req.query?.limit || "5000"), 10)),
+    );
 
     const query = {
       branchId: branch.branchId,
@@ -607,7 +653,7 @@ export const getPublicGroupedTree = async (req, res) => {
           "allergens tags isFeatured isActive isAvailable isSpicy " +
           "calories sku preparationTimeInMinutes ingredients addons " +
           "isSizedBased sizes fixedPrice offeredPrice discount createdAt updatedAt " +
-          "foodCategoryGroupCode foodCategoryGroupId foodCategoryGroupNameEnglish"
+          "foodCategoryGroupCode foodCategoryGroupId foodCategoryGroupNameEnglish",
       )
       .lean();
 
@@ -616,9 +662,14 @@ export const getPublicGroupedTree = async (req, res) => {
     const sectionsTouched = new Set();
 
     function groupNameOf(it) {
-      const name = (it.foodCategoryGroupNameEnglish && String(it.foodCategoryGroupNameEnglish).trim()) || "";
+      const name =
+        (it.foodCategoryGroupNameEnglish &&
+          String(it.foodCategoryGroupNameEnglish).trim()) ||
+        "";
       if (name) return name;
-      const code = (it.foodCategoryGroupCode && String(it.foodCategoryGroupCode).trim()) || "";
+      const code =
+        (it.foodCategoryGroupCode && String(it.foodCategoryGroupCode).trim()) ||
+        "";
       if (code) return code.charAt(0) + code.slice(1).toLowerCase();
       return "Uncategorized";
     }
@@ -629,7 +680,8 @@ export const getPublicGroupedTree = async (req, res) => {
       const gName = groupNameOf(it);
       if (!topMap.has(gName)) topMap.set(gName, new Map());
 
-      const typeName = (it.itemType && String(it.itemType).trim()) || "Uncategorized";
+      const typeName =
+        (it.itemType && String(it.itemType).trim()) || "Uncategorized";
       const typeMap = topMap.get(gName);
       if (!typeMap.has(typeName)) typeMap.set(typeName, []);
       typeMap.get(typeName).push(it);
@@ -637,11 +689,11 @@ export const getPublicGroupedTree = async (req, res) => {
 
     const tree = {};
     for (const [gName, typeMap] of Array.from(topMap.entries()).sort((a, b) =>
-      a[0].localeCompare(b[0])
+      a[0].localeCompare(b[0]),
     )) {
       tree[gName] = {};
-      for (const [typeName, list] of Array.from(typeMap.entries()).sort((a, b) =>
-        a[0].localeCompare(b[0])
+      for (const [typeName, list] of Array.from(typeMap.entries()).sort(
+        (a, b) => a[0].localeCompare(b[0]),
       )) {
         tree[gName][typeName] = list;
       }
@@ -671,7 +723,9 @@ export const getPublicGroupedTree = async (req, res) => {
     const status = err.status || 500;
     return res
       .status(status)
-      .json({ message: err.message || "Failed to load items grouped by food category" });
+      .json({
+        message: err.message || "Failed to load items grouped by food category",
+      });
   }
 };
 
@@ -681,7 +735,9 @@ export const getPublicThemeMapping = async (req, res) => {
   try {
     const { branch, qr } = await resolveContext(req);
 
-    const sectionKey = String(req.query?.sectionKey || "").trim().toUpperCase();
+    const sectionKey = String(req.query?.sectionKey || "")
+      .trim()
+      .toUpperCase();
     if (!sectionKey) {
       return res.status(400).json({ message: "sectionKey is required" });
     }
@@ -735,11 +791,13 @@ export const getPublicThemeMappingAll = async (req, res) => {
       .sort({ sectionKey: 1 })
       .lean();
 
-    const allowed = new Set(["01","02","03","04","05","06","07","08"]);
+    const allowed = new Set(["01", "02", "03", "04", "05", "06", "07", "08"]);
 
     const records = rows.map((r) => {
       const clean = {};
-      for (const [k, v] of Object.entries(Object.fromEntries(r.itemTypeDesignMap || {}))) {
+      for (const [k, v] of Object.entries(
+        Object.fromEntries(r.itemTypeDesignMap || {}),
+      )) {
         const vv = String(v || "").padStart(2, "0");
         clean[k] = allowed.has(vv) ? vv : "01";
       }
@@ -764,7 +822,8 @@ export const getPublicThemeMappingAll = async (req, res) => {
     return res.json(resp);
   } catch (err) {
     const status = err.status || 500;
-    return res.status(status).json({ message: err.message || "Failed to load theme mappings" });
+    return res
+      .status(status)
+      .json({ message: err.message || "Failed to load theme mappings" });
   }
 };
-
