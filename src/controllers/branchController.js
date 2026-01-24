@@ -445,16 +445,6 @@ export const updateBranchInformation = async (req, res) => {
       }
     }
 
-    // ❌ remove this entire block from updateBranchInformation
-    if (b.customization && typeof b.customization === "object") {
-      branch.customization = branch.customization || {};
-      if (b.customization.isClassicMenu !== undefined) {
-        branch.customization.isClassicMenu = toBool(
-          b.customization.isClassicMenu,
-        );
-      }
-    }
-
     await branch.save();
 
     // bump menu stamp so customer cached view knows something changed
