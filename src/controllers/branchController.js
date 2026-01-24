@@ -632,8 +632,9 @@ export const patchBranchCustomization = async (req, res) => {
     if (!uid) return res.status(401).json({ message: "Unauthorized" });
 
     const { branchId } = req.params;
-    if (!branchId)
+    if (!branchId) {
       return res.status(400).json({ message: "branchId is required" });
+    }
 
     const branch = await loadBranchByPublicId(branchId);
     if (!branch) return res.status(404).json({ message: "Branch not found" });
@@ -642,15 +643,10 @@ export const patchBranchCustomization = async (req, res) => {
       return res.status(403).json({ message: "Forbidden" });
     }
 
-    const b = req.body || {};
-    if (!b || typeof b !== "object") {
-      return res.status(400).json({ message: "Invalid body" });
-    }
-
-    // ✅ Only accept customization object
+    const body = req.body || {};
     const c =
-      b.customization && typeof b.customization === "object"
-        ? b.customization
+      body.customization && typeof body.customization === "object"
+        ? body.customization
         : null;
 
     if (!c) {
@@ -659,51 +655,53 @@ export const patchBranchCustomization = async (req, res) => {
         .json({ message: "customization object is required" });
     }
 
-    // Ensure object exists (for older branches)
-    if (!branch.customization) branch.customization = { isClassicMenu: false };
+    // ✅ MUST use hasOwnProperty so "false" is not ignored
+    const hasOwn = (obj, key) =>
+      Object.prototype.hasOwnProperty.call(obj, key);
 
-    // ✅ Update allowed keys (future: add more keys here)
-    let changed = false;
+    const before = branch.customization?.isClassicMenu ?? false;
 
-    if (c.isClassicMenu !== undefined) {
-      const v = toBool(c.isClassicMenu);
-      if (branch.customization.isClassicMenu !== v) {
-        // Use set() so Mongoose definitely tracks nested change
-        branch.set("customization.isClassicMenu", v);
-        changed = true;
-      }
-    }
+    // Ensure customization object exists
+    if (!branch.customization) branch.customization = {};
 
-    if (!changed) {
-      return res.json({
-        message: "No customization changes",
-        buildTag: "customization-route-v1",
-        branchId: branch.branchId,
-        customization: branch.customization,
+    // ✅ Apply even if value is false
+    if (hasOwn(c, "isClassicMenu")) {
+      const next = toBool(c.isClassicMenu);
+
+      // ALWAYS set when key exists (even if same) — avoids “false ignored” confusion
+      branch.set("customization.isClassicMenu", next);
+    } else {
+      return res.status(400).json({
+        message: "customization.isClassicMenu is required",
+        buildTag: "customization-route-v2",
       });
     }
 
-    // ✅ Force mark modified (belt + suspenders)
+    // Force mongoose to treat it as modified
     branch.markModified("customization");
 
     await branch.save();
-
-    // ✅ IMPORTANT: bump menu stamp so customer cached view knows something changed
     await touchBranchMenuStampByBizId(branch.branchId);
 
-    const updated = await Branch.findById(branch._id).lean();
+    // Read fresh (by branchId) so you *see exactly what DB has*
+    const fresh = await Branch.findOne({ branchId: branch.branchId }).lean();
+
+    const after = fresh?.customization?.isClassicMenu ?? false;
 
     return res.json({
       message: "Customization updated",
-      buildTag: "customization-route-v1",
-      branch: updated,
-      customization: updated?.customization ?? null,
+      buildTag: "customization-route-v2",
+      branchId: branch.branchId,
+      before,
+      after,
+      customization: fresh?.customization ?? { isClassicMenu: false },
     });
   } catch (err) {
     console.error("patchBranchCustomization error:", err);
     return res.status(500).json({ message: err.message });
   }
 };
+
 
 // import MenuType from "../models/MenuType.js";
 // import { generateBranchId } from "../utils/generateBranchId.js";
