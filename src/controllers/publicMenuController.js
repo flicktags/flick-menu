@@ -79,40 +79,6 @@ function buildPublicBranchInfo(branch) {
   };
 }
 
-
-// function buildPublicBranchInfo(branch) {
-//   return {
-//     branchId: branch?.branchId ?? null,
-//     vendorId: branch?.vendorId ?? null,
-//     nameEnglish: branch?.nameEnglish ?? null,
-//     nameArabic: branch?.nameArabic ?? null,
-//     timeZone: branch?.timeZone ?? null,
-//     currency: branch?.currency ?? null,
-//     serviceFeatures: Array.isArray(branch?.serviceFeatures)
-//       ? branch.serviceFeatures
-//       : [],
-//     openingHours: branch?.openingHours ?? null,
-//     contact: branch?.contact ?? null,
-//     taxes: {
-//       vatPercentage: Number(branch?.taxes?.vatPercentage ?? 0) || 0,
-//       serviceChargePercentage:
-//         Number(branch?.taxes?.serviceChargePercentage ?? 0) || 0,
-//       vatNumber: (branch?.taxes?.vatNumber ?? "").toString(),
-//       // default TRUE if missing
-//       isVatInclusive: branch?.taxes?.isVatInclusive !== false,
-//     },
-
-//     branding: {
-//       logo: branch?.branding?.logo ?? null,
-//       coverBannerLogo: branch?.branding?.coverBannerLogo ?? null,
-//       splashScreenEnabled: branch?.branding?.splashScreenEnabled === true,
-//     },
-//      customization: {
-//       isClassicMenu: branch?.customization?.isClassicMenu === true,
-//     },
-//   };
-// }
-
 // -----------------------------------------------------------------------------
 // Meta (currency + vendor VAT + settings)
 async function buildMetaForBranch(branch) {
@@ -128,20 +94,6 @@ async function buildMetaForBranch(branch) {
       )
       .lean();
 
-    // if (v) {
-    //   const vatPct =
-    //     typeof v?.taxes?.vatPercentage === "number" ? v.taxes.vatPercentage : null;
-
-    //   vendor = {
-    //     vendorId: v.vendorId || null,
-    //     vatNumber: v?.billing?.vatNumber ?? null,
-    //     vatRate: vatPct !== null ? vatPct / 100 : null, // e.g. 10 -> 0.10
-    //   };
-
-    //   if (typeof v?.settings?.priceIncludesVat === "boolean") {
-    //     settings = { priceIncludesVat: v.settings.priceIncludesVat };
-    //   }
-    // }
     if (v) {
       // Prefer BRANCH vat percentage if present; otherwise fallback to vendor vatPercentage
       const branchVatPct =
@@ -350,8 +302,11 @@ export const getPublicMenuTypes = async (req, res) => {
         branchId: branch.branchId,
         menuStamp: buildMenuStamp(branch),
         serverTime: new Date().toISOString(),
-            branch: { customization: { isClassicMenu: branch?.customization?.isClassicMenu === true } },
-
+        branch: {
+          customization: {
+            isClassicMenu: branch?.customization?.isClassicMenu === true,
+          },
+        },
       };
       if (qr) resp.qr = qr;
       return res.json(resp);
@@ -387,9 +342,27 @@ export const getPublicMenuTypes = async (req, res) => {
           coverBannerLogo: branch.branding?.coverBannerLogo ?? null,
           splashScreenEnabled: branch.branding?.splashScreenEnabled === true,
         },
+        // taxes: {
+        //   isVatInclusive: branch?.taxes?.isVatInclusive !== false, // default true
+        // },
         taxes: {
+          // VAT inclusive flag
           isVatInclusive: branch?.taxes?.isVatInclusive !== false, // default true
+
+          // ✅ Platform fee fields
+          platformFeePerOrder:
+            typeof branch?.taxes?.platformFeePerOrder === "number"
+              ? branch.taxes.platformFeePerOrder
+              : null,
+
+          // default true if missing
+          showPlatformFee: branch?.taxes?.showPlatformFee !== false,
+
+          // default true if missing
+          platformFeePaidByCustomer:
+            branch?.taxes?.platformFeePaidByCustomer !== false,
         },
+
         customization: {
           isClassicMenu: branch?.customization?.isClassicMenu === true,
         },
@@ -774,11 +747,9 @@ export const getPublicGroupedTree = async (req, res) => {
     return res.json(resp);
   } catch (err) {
     const status = err.status || 500;
-    return res
-      .status(status)
-      .json({
-        message: err.message || "Failed to load items grouped by food category",
-      });
+    return res.status(status).json({
+      message: err.message || "Failed to load items grouped by food category",
+    });
   }
 };
 
