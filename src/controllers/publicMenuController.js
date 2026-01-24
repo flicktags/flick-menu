@@ -27,6 +27,7 @@ function normalizeItemTypeDesignMap(raw) {
 }
 
 // ✅ NEW: lightweight branch info for customer view (safe to add to all public APIs)
+
 function buildPublicBranchInfo(branch) {
   return {
     branchId: branch?.branchId ?? null,
@@ -35,18 +36,35 @@ function buildPublicBranchInfo(branch) {
     nameArabic: branch?.nameArabic ?? null,
     timeZone: branch?.timeZone ?? null,
     currency: branch?.currency ?? null,
+
     serviceFeatures: Array.isArray(branch?.serviceFeatures)
       ? branch.serviceFeatures
       : [],
+
     openingHours: branch?.openingHours ?? null,
     contact: branch?.contact ?? null,
+
     taxes: {
       vatPercentage: Number(branch?.taxes?.vatPercentage ?? 0) || 0,
       serviceChargePercentage:
         Number(branch?.taxes?.serviceChargePercentage ?? 0) || 0,
       vatNumber: (branch?.taxes?.vatNumber ?? "").toString(),
+
       // default TRUE if missing
       isVatInclusive: branch?.taxes?.isVatInclusive !== false,
+
+      // ✅ NEW: Platform fee fields (inside taxes)
+      platformFeePerOrder:
+        typeof branch?.taxes?.platformFeePerOrder === "number"
+          ? branch.taxes.platformFeePerOrder
+          : null,
+
+      // default TRUE if missing
+      showPlatformFee: branch?.taxes?.showPlatformFee !== false,
+
+      // default TRUE if missing
+      platformFeePaidByCustomer:
+        branch?.taxes?.platformFeePaidByCustomer !== false,
     },
 
     branding: {
@@ -54,11 +72,46 @@ function buildPublicBranchInfo(branch) {
       coverBannerLogo: branch?.branding?.coverBannerLogo ?? null,
       splashScreenEnabled: branch?.branding?.splashScreenEnabled === true,
     },
-     customization: {
+
+    customization: {
       isClassicMenu: branch?.customization?.isClassicMenu === true,
     },
   };
 }
+
+
+// function buildPublicBranchInfo(branch) {
+//   return {
+//     branchId: branch?.branchId ?? null,
+//     vendorId: branch?.vendorId ?? null,
+//     nameEnglish: branch?.nameEnglish ?? null,
+//     nameArabic: branch?.nameArabic ?? null,
+//     timeZone: branch?.timeZone ?? null,
+//     currency: branch?.currency ?? null,
+//     serviceFeatures: Array.isArray(branch?.serviceFeatures)
+//       ? branch.serviceFeatures
+//       : [],
+//     openingHours: branch?.openingHours ?? null,
+//     contact: branch?.contact ?? null,
+//     taxes: {
+//       vatPercentage: Number(branch?.taxes?.vatPercentage ?? 0) || 0,
+//       serviceChargePercentage:
+//         Number(branch?.taxes?.serviceChargePercentage ?? 0) || 0,
+//       vatNumber: (branch?.taxes?.vatNumber ?? "").toString(),
+//       // default TRUE if missing
+//       isVatInclusive: branch?.taxes?.isVatInclusive !== false,
+//     },
+
+//     branding: {
+//       logo: branch?.branding?.logo ?? null,
+//       coverBannerLogo: branch?.branding?.coverBannerLogo ?? null,
+//       splashScreenEnabled: branch?.branding?.splashScreenEnabled === true,
+//     },
+//      customization: {
+//       isClassicMenu: branch?.customization?.isClassicMenu === true,
+//     },
+//   };
+// }
 
 // -----------------------------------------------------------------------------
 // Meta (currency + vendor VAT + settings)
