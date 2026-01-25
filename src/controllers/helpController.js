@@ -16,6 +16,19 @@ function getClientIp(req) {
   return req.ip || req.connection?.remoteAddress || null;
 }
 
+function buildQrKey(qrId, type, number, label) {
+  const _qrId = String(qrId || "").trim();
+  const _type = String(type || "").trim().toLowerCase();
+  const _number = String(number || "").trim().toLowerCase();
+  const _label = String(label || "").trim().toLowerCase();
+
+  if (_qrId) return `qrid::${_qrId}`;
+  if (_type && _number) return `${_type}::${_number}`;
+  if (_label) return `label::${_label}`;
+  return "unknown";
+}
+
+
 /**
  * PUBLIC: POST /api/public/help/call-waiter
  * Body:
@@ -45,7 +58,6 @@ export const callWaiter = async (req, res) => {
       return res.status(400).json({ error: "Missing qr object" });
     }
 
-    // ✅ Optional: if client sends vendorId, we can validate it matches branch.vendorId
     const reqVendorId = safeStr(body.vendorId, 50);
 
     // 0) Load Branch by branch CODE
@@ -53,7 +65,8 @@ export const callWaiter = async (req, res) => {
     if (!branch) return res.status(404).json({ error: "Branch not found" });
 
     const vendorId = branch.vendorId;
-    if (!vendorId) return res.status(400).json({ error: "Branch missing vendorId" });
+    if (!vendorId)
+      return res.status(400).json({ error: "Branch missing vendorId" });
 
     if (reqVendorId && String(reqVendorId) !== String(vendorId)) {
       return res.status(403).json({ error: "Vendor mismatch" });
@@ -66,74 +79,65 @@ export const callWaiter = async (req, res) => {
     let number = safeStr(qr.number, 80);
 
     if (qrId) {
-      // ✅ Fetch QR by qrId + vendorId (safer)
-      const qrDoc = await Qr.findOne({ qrId: String(qrId), vendorId: String(vendorId) }).lean();
-      if (!qrDoc) {
-        return res.status(400).json({ error: "Invalid qrId" });
-      }
+      const qrDoc = await Qr.findOne({
+        qrId: String(qrId),
+        vendorId: String(vendorId),
+      }).lean();
 
-      // ✅ CRITICAL FIX:
-      // qrDoc.branchId is the Branch ObjectId (string/ObjectId), NOT "BR-000005"
-      // so compare with branch._id
+      if (!qrDoc) return res.status(400).json({ error: "Invalid qrId" });
+
+      // ✅ compare qrDoc.branchId with branch._id
       if (qrDoc.branchId && String(qrDoc.branchId) !== String(branch._id)) {
         return res.status(403).json({ error: "QR does not belong to branch" });
       }
 
-      // Enrich missing values from QR doc
       label = label || safeStr(qrDoc.label, 80);
       type = type || safeStr(qrDoc.type, 20);
       number = number || safeStr(qrDoc.number, 80);
     }
 
-    // minimal required for KDS display
     if (!label && !number) {
       return res.status(400).json({ error: "QR missing label/number" });
     }
 
-    // 2) Anti-spam: if OPEN request exists for same table within last 60 sec, just "ping"
+    const qrKey = buildQrKey(qrId, type, number, label);
     const now = new Date();
-    const pingCutoff = new Date(now.getTime() - 60 * 1000);
 
-    const orConditions = [];
-    if (qrId) {
-      orConditions.push({ "qr.qrId": qrId });
-    } else {
-      // fallback match by label/number if no qrId
-      if (label) orConditions.push({ "qr.label": label });
-      if (number) orConditions.push({ "qr.number": number });
-    }
-
+    // ✅ 2) BLOCK duplicates: if OPEN exists for same table -> do not allow new request
     const existing = await HelpRequest.findOne({
       vendorId,
-      branchId: branchCode, // stored as code in HelpRequest (as you already do)
+      branchId: branchCode, // stored as code in HelpRequest (your existing behavior)
       status: "OPEN",
-      ...(orConditions.length ? { $or: orConditions } : {}),
-      lastPingAt: { $gte: pingCutoff },
+      qrKey, // ✅ stable match
     });
 
     if (existing) {
+      // Optional: still record that user pressed again (doesn't create new request)
       existing.pingCount = (Number(existing.pingCount || 1) || 1) + 1;
       existing.lastPingAt = now;
       if (message) existing.message = message; // last message wins
       await existing.save();
 
-      return res.status(200).json({
-        ok: true,
-        message: "Help request pinged",
+      return res.status(409).json({
+        ok: false,
+        code: "HELP_ALREADY_OPEN",
+        message: "A help request is already open for this table.",
         help: {
           id: String(existing._id),
           status: existing.status,
           pingCount: existing.pingCount,
           lastPingAt: existing.lastPingAt,
           qr: existing.qr,
+          message: existing.message || null,
         },
       });
     }
 
-    // 3) Create new help request
+    // ✅ 3) Create new help request
     const created = await HelpRequest.create({
       vendorId,
-      branchId: branchCode, // keep your existing behavior (code)
+      branchId: branchCode,
+      qrKey, // ✅ store key
       qr: {
         qrId: qrId || null,
         label: label || null,
@@ -166,6 +170,7 @@ export const callWaiter = async (req, res) => {
     return res.status(500).json({ error: err.message || "Server error" });
   }
 };
+
 
 // export const callWaiter = async (req, res) => {
 //   try {
