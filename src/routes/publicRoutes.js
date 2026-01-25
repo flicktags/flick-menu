@@ -30,10 +30,14 @@ import {
   getPublicGroupedTree, // ✅ NEW
   getPublicThemeMapping,
   getPublicThemeMappingAll,
-
 } from "../controllers/publicMenuController.js";
-import { createOrder, getPublicOrderById, getPublicOrderByToken,   addItemsToPublicOrder } from "../controllers/orderController.js";       // ✅ ADD
-
+import {
+  createOrder,
+  getPublicOrderById,
+  getPublicOrderByToken,
+  addItemsToPublicOrder,
+} from "../controllers/orderController.js"; // ✅ ADD
+import helpPublicRoutes from "./helpPublicRoutes.js"; // ✅ ADD
 
 const router = express.Router();
 
@@ -46,11 +50,13 @@ router.get("/menu/section-grouped", getPublicSectionItemsGrouped);
 router.get("/menu/catalog", getPublicBranchCatalog);
 router.get("/menu/grouped-tree", getPublicGroupedTree);
 // ⬇️ NEW (no auth):
-router.get("/menu/theme-mapping", getPublicThemeMapping);       // one section
+router.get("/menu/theme-mapping", getPublicThemeMapping); // one section
 router.get("/menu/theme-mapping/all", getPublicThemeMappingAll); // all sections
 router.post("/orders", createOrder);
 router.get("/orders/:id", getPublicOrderById);
 router.get("/orders/token/:token", getPublicOrderByToken);
 router.post("/orders/:id/add-items", addItemsToPublicOrder); // add more items to the on going order
+
+router.use("/help", helpPublicRoutes);
 
 export default router;
