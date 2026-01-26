@@ -35,8 +35,46 @@ const OrderSchema = new mongoose.Schema(
         quantity: Number,
         notes: String,
         lineTotal: Number,
+
+        // ✅ NEW: Out-of-stock support per line
+        availability: {
+          type: String,
+          enum: ["AVAILABLE", "OUT_OF_STOCK"],
+          default: "AVAILABLE",
+        },
+        unavailableReason: { type: String, default: null },
+        unavailableAt: { type: Date, default: null },
+        unavailableBy: { type: String, default: null },
       },
     ],
+
+    // ✅ Optional: so customer can show a banner once (based on revision change)
+    lastChange: {
+      type: {
+        type: String, // e.g. "ITEM_OUT_OF_STOCK"
+        default: null,
+        index: true,
+      },
+      at: { type: Date, default: null },
+      by: { type: String, default: null },
+      payload: { type: mongoose.Schema.Types.Mixed, default: null },
+    },
+
+    // items: [
+    //   {
+    //     itemId: String,
+    //     nameEnglish: String,
+    //     nameArabic: String,
+    //     imageUrl: String,
+    //     isSizedBased: Boolean,
+    //     size: { label: String, price: Number },
+    //     addons: [{ id: String, label: String, price: Number }],
+    //     unitBasePrice: Number,
+    //     quantity: Number,
+    //     notes: String,
+    //     lineTotal: Number,
+    //   },
+    // ],
 
     pricing: {
       subtotal: Number,
@@ -105,8 +143,11 @@ OrderSchema.index({ branchId: 1, status: 1, readyAt: 1 });
 OrderSchema.index({ branchId: 1, status: 1, servedAt: 1 });
 OrderSchema.index({ branchId: 1, readyAtCycle: 1, kitchenCycle: 1 });
 OrderSchema.index({ branchId: 1, businessDayLocal: 1, createdAt: -1 });
-OrderSchema.index({ branchId: 1, businessDayStartUTC: 1, businessDayEndUTC: 1 });
-
+OrderSchema.index({
+  branchId: 1,
+  businessDayStartUTC: 1,
+  businessDayEndUTC: 1,
+});
 
 export default mongoose.model("Order", OrderSchema);
 
