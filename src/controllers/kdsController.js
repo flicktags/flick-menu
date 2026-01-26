@@ -482,7 +482,7 @@ export const ackHelpRequest = async (req, res) => {
       });
     }
 
-    help.status = "ACKED";
+    help.status = "ACK";
     help.ackAt = new Date();
 
     // If your verifyFirebaseToken adds req.user, store it. Safe fallback to null.
