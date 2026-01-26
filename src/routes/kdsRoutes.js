@@ -4,7 +4,8 @@ import { verifyFirebaseToken } from "../middlewares/authMiddleware.js";
 import {
   getKdsOverview,
   updateKdsOrderStatus,
-  ackHelpRequest,updateKdsOrderItemAvailability
+  ackHelpRequest,
+  updateKdsOrderItemAvailability,
 } from "../controllers/kdsController.js";
 
 const router = express.Router();
@@ -14,7 +15,7 @@ router.get("/overview", verifyFirebaseToken, getKdsOverview);
 router.patch("/orders/:id/status", verifyFirebaseToken, updateKdsOrderStatus);
 router.patch("/help/:id/ack", verifyFirebaseToken, ackHelpRequest);
 router.patch(
-  "/api/kds/orders/:id/items/:lineId/availability",
+  "/orders/:id/items/:lineId/availability",
   verifyFirebaseToken,
   updateKdsOrderItemAvailability,
 );
