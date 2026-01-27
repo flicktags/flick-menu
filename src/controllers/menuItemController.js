@@ -160,14 +160,32 @@ export const createMenuItem = async (req, res) => {
     const branchId = asStr(req.body.branchId).trim();
     const sectionKey = asUpper(req.body.sectionKey);
 
-    if (!branchId) return res.status(400).json({ code: "BRANCH_ID_REQUIRED", message: "branchId is required" });
-    if (!sectionKey) return res.status(400).json({ code: "SECTION_KEY_REQUIRED", message: "sectionKey is required" });
+    if (!branchId) {
+      return res.status(400).json({
+        code: "BRANCH_ID_REQUIRED",
+        message: "branchId is required",
+      });
+    }
+    if (!sectionKey) {
+      return res.status(400).json({
+        code: "SECTION_KEY_REQUIRED",
+        message: "sectionKey is required",
+      });
+    }
 
     const branch = await Branch.findOne({ branchId }).lean(false);
-    if (!branch) return res.status(404).json({ code: "BRANCH_NOT_FOUND", message: "Branch not found" });
+    if (!branch) {
+      return res.status(404).json({
+        code: "BRANCH_NOT_FOUND",
+        message: "Branch not found",
+      });
+    }
 
     if (!(await userOwnsBranch(req, branch))) {
-      return res.status(403).json({ code: "FORBIDDEN", message: "You do not own this branch" });
+      return res.status(403).json({
+        code: "FORBIDDEN",
+        message: "You do not own this branch",
+      });
     }
 
     if (req.body.vendorId && String(req.body.vendorId) !== branch.vendorId) {
@@ -182,8 +200,59 @@ export const createMenuItem = async (req, res) => {
       return res.status(400).json({
         code: "SECTION_NOT_ENABLED",
         message: `Menu section '${sectionKey}' is not enabled on branch ${branchId}`,
-        details: { enabledSections: (branch.menuSections || []).filter((s) => s.isEnabled).map((s) => s.key) },
+        details: {
+          enabledSections: (branch.menuSections || [])
+            .filter((s) => s.isEnabled)
+            .map((s) => s.key),
+        },
       });
+    }
+
+    // ======================================================
+    // ✅ KDS Station (Option A)
+    // - Missing => MAIN
+    // - Present but invalid/disabled => 400
+    // ======================================================
+    const rawStationKey = String(req.body.kdsStationKey ?? "").trim();
+    const normalizedStationKey = rawStationKey ? rawStationKey.toUpperCase() : "";
+
+    const stations = Array.isArray(branch.stations) ? branch.stations : [];
+
+    // If not provided, default MAIN (but still validate MAIN exists & enabled if you want)
+    const finalStationKey = normalizedStationKey || "MAIN";
+
+    const stationExistsAndEnabled = stations.some((s) => {
+      const key = String(s?.key ?? "").trim().toUpperCase();
+      const enabled = s?.isEnabled !== false; // treat missing as enabled
+      return key === finalStationKey && enabled;
+    });
+
+    // Option A enforcement:
+    // if user provided a key, it MUST exist & be enabled.
+    // if user did not provide key, MAIN is used. You may still enforce MAIN exists if you want.
+    if (normalizedStationKey) {
+      if (!stationExistsAndEnabled) {
+        return res.status(400).json({
+          code: "INVALID_STATION_KEY",
+          message: `Invalid or disabled kdsStationKey '${finalStationKey}' for branch ${branchId}`,
+          details: {
+            provided: normalizedStationKey,
+            allowed: stations
+              .filter((s) => s?.isEnabled !== false)
+              .map((s) => String(s?.key ?? "").trim().toUpperCase())
+              .filter(Boolean),
+          },
+        });
+      }
+    } else {
+      // If you want to strictly enforce MAIN exists & enabled too, keep this check:
+      // If you prefer always allowing MAIN even if stations list is empty, remove this block.
+      if (!stationExistsAndEnabled) {
+        return res.status(400).json({
+          code: "MAIN_STATION_MISSING",
+          message: `Default station MAIN is missing or disabled for branch ${branchId}`,
+        });
+      }
     }
 
     // Build payload with safe coercions
@@ -199,7 +268,7 @@ export const createMenuItem = async (req, res) => {
       descriptionArabic: asStr(req.body.descriptionArabic, ""),
 
       imageUrl: asStr(req.body.imageUrl, ""),
-      imagePublicId: asStr(req.body.imagePublicId, "").trim(), // ✅ NEW (optional)
+      imagePublicId: asStr(req.body.imagePublicId, "").trim(),
       videoUrl: asStr(req.body.videoUrl, ""),
 
       allergens: asArrayOfStrings(req.body.allergens),
@@ -217,9 +286,10 @@ export const createMenuItem = async (req, res) => {
       ingredients: asArrayOfStrings(req.body.ingredients),
       addons: Array.isArray(req.body.addons) ? req.body.addons : [],
 
-      // IMPORTANT: undefined (not null) when not present
       discount:
-        req.body.discount && typeof req.body.discount === "object" ? req.body.discount : undefined,
+        req.body.discount && typeof req.body.discount === "object"
+          ? req.body.discount
+          : undefined,
 
       isSizedBased: asBool(req.body.isSizedBased, false),
       sizes: Array.isArray(req.body.sizes) ? req.body.sizes : [],
@@ -229,18 +299,20 @@ export const createMenuItem = async (req, res) => {
 
       sortOrder: asNum(req.body.sortOrder, 0),
 
-      // ---------- NEW FIELDS (Group-level category) ----------
-      foodCategoryGroupId:
-        req.body.foodCategoryGroupId ? String(req.body.foodCategoryGroupId) : null,
+      // ---------- Group-level category ----------
+      foodCategoryGroupId: req.body.foodCategoryGroupId
+        ? String(req.body.foodCategoryGroupId)
+        : null,
       foodCategoryGroupCode: asUpper(req.body.foodCategoryGroupCode, ""),
       foodCategoryGroupNameEnglish: asStr(req.body.foodCategoryGroupNameEnglish, "").trim(),
-      // -------------------------------------------------------
+
+      // ✅ IMPORTANT: add this (this was missing)
+      kdsStationKey: finalStationKey,
     };
 
-    // Log payload once for debugging (remove if noisy)
+    console.log("[createMenuItem] kdsStationKey raw=", rawStationKey, "final=", finalStationKey);
     console.log("[createMenuItem] payload:", JSON.stringify(payload));
 
-    // Business rules check (keep this if you have it)
     const errors = validateBusinessRules ? validateBusinessRules(payload) : [];
     if (errors.length) {
       return res.status(400).json({
@@ -254,27 +326,146 @@ export const createMenuItem = async (req, res) => {
 
     await touchBranchMenuStampByBizId(branchId);
 
-    // Optional: refresh section stats if you have this util
-    // await refreshSectionActiveCount(branch, sectionKey);
-
     return res.status(201).json({ message: "Menu item created", item });
   } catch (err) {
     console.error("createMenuItem error:", err);
-    // Bubble up Mongoose validation/cast details to help debugging
     return res.status(500).json({
       code: "SERVER_ERROR",
       message: err?.message || "Unexpected error",
-      details: err?.errors ? Object.keys(err.errors).reduce((o, k) => {
-        o[k] = err.errors[k]?.message;
-        return o;
-      }, {}) : undefined,
+      details: err?.errors
+        ? Object.keys(err.errors).reduce((o, k) => {
+            o[k] = err.errors[k]?.message;
+            return o;
+          }, {})
+        : undefined,
       name: err?.name,
       kind: err?.kind,
       path: err?.path,
-      value: err?.value
+      value: err?.value,
     });
   }
 };
+
+// export const createMenuItem = async (req, res) => {
+//   try {
+//     const branchId = asStr(req.body.branchId).trim();
+//     const sectionKey = asUpper(req.body.sectionKey);
+
+//     if (!branchId) return res.status(400).json({ code: "BRANCH_ID_REQUIRED", message: "branchId is required" });
+//     if (!sectionKey) return res.status(400).json({ code: "SECTION_KEY_REQUIRED", message: "sectionKey is required" });
+
+//     const branch = await Branch.findOne({ branchId }).lean(false);
+//     if (!branch) return res.status(404).json({ code: "BRANCH_NOT_FOUND", message: "Branch not found" });
+
+//     if (!(await userOwnsBranch(req, branch))) {
+//       return res.status(403).json({ code: "FORBIDDEN", message: "You do not own this branch" });
+//     }
+
+//     if (req.body.vendorId && String(req.body.vendorId) !== branch.vendorId) {
+//       return res.status(400).json({
+//         code: "VENDOR_MISMATCH",
+//         message: "vendorId in body does not match branch.vendorId",
+//       });
+//     }
+
+//     const sec = (branch.menuSections || []).find((s) => s.key === sectionKey);
+//     if (!sec || sec.isEnabled !== true) {
+//       return res.status(400).json({
+//         code: "SECTION_NOT_ENABLED",
+//         message: `Menu section '${sectionKey}' is not enabled on branch ${branchId}`,
+//         details: { enabledSections: (branch.menuSections || []).filter((s) => s.isEnabled).map((s) => s.key) },
+//       });
+//     }
+
+//     // Build payload with safe coercions
+//     const payload = {
+//       branchId,
+//       vendorId: branch.vendorId,
+//       sectionKey,
+
+//       itemType: asStr(req.body.itemType).trim(),
+//       nameEnglish: asStr(req.body.nameEnglish).trim(),
+//       nameArabic: asStr(req.body.nameArabic).trim(),
+//       description: asStr(req.body.description, ""),
+//       descriptionArabic: asStr(req.body.descriptionArabic, ""),
+
+//       imageUrl: asStr(req.body.imageUrl, ""),
+//       imagePublicId: asStr(req.body.imagePublicId, "").trim(), // ✅ NEW (optional)
+//       videoUrl: asStr(req.body.videoUrl, ""),
+
+//       allergens: asArrayOfStrings(req.body.allergens),
+//       tags: asArrayOfStrings(req.body.tags),
+
+//       isFeatured: asBool(req.body.isFeatured, false),
+//       isActive: req.body.isActive !== false,
+//       isAvailable: req.body.isAvailable !== false,
+//       isSpicy: asBool(req.body.isSpicy, false),
+
+//       calories: asNum(req.body.calories, 0),
+//       sku: asStr(req.body.sku, "").trim(),
+//       preparationTimeInMinutes: asNum(req.body.preparationTimeInMinutes, 10),
+
+//       ingredients: asArrayOfStrings(req.body.ingredients),
+//       addons: Array.isArray(req.body.addons) ? req.body.addons : [],
+
+//       // IMPORTANT: undefined (not null) when not present
+//       discount:
+//         req.body.discount && typeof req.body.discount === "object" ? req.body.discount : undefined,
+
+//       isSizedBased: asBool(req.body.isSizedBased, false),
+//       sizes: Array.isArray(req.body.sizes) ? req.body.sizes : [],
+
+//       fixedPrice: asNum(req.body.fixedPrice, 0),
+//       offeredPrice: asOptionalNumber(req.body.offeredPrice),
+
+//       sortOrder: asNum(req.body.sortOrder, 0),
+
+//       // ---------- NEW FIELDS (Group-level category) ----------
+//       foodCategoryGroupId:
+//         req.body.foodCategoryGroupId ? String(req.body.foodCategoryGroupId) : null,
+//       foodCategoryGroupCode: asUpper(req.body.foodCategoryGroupCode, ""),
+//       foodCategoryGroupNameEnglish: asStr(req.body.foodCategoryGroupNameEnglish, "").trim(),
+//       // -------------------------------------------------------
+//     };
+
+//     // Log payload once for debugging (remove if noisy)
+//     console.log("[createMenuItem] payload:", JSON.stringify(payload));
+
+//     // Business rules check (keep this if you have it)
+//     const errors = validateBusinessRules ? validateBusinessRules(payload) : [];
+//     if (errors.length) {
+//       return res.status(400).json({
+//         code: "VALIDATION_FAILED",
+//         message: "Invalid payload",
+//         errors,
+//       });
+//     }
+
+//     const item = await MenuItem.create(payload);
+
+//     await touchBranchMenuStampByBizId(branchId);
+
+//     // Optional: refresh section stats if you have this util
+//     // await refreshSectionActiveCount(branch, sectionKey);
+
+//     return res.status(201).json({ message: "Menu item created", item });
+//   } catch (err) {
+//     console.error("createMenuItem error:", err);
+//     // Bubble up Mongoose validation/cast details to help debugging
+//     return res.status(500).json({
+//       code: "SERVER_ERROR",
+//       message: err?.message || "Unexpected error",
+//       details: err?.errors ? Object.keys(err.errors).reduce((o, k) => {
+//         o[k] = err.errors[k]?.message;
+//         return o;
+//       }, {}) : undefined,
+//       name: err?.name,
+//       kind: err?.kind,
+//       path: err?.path,
+//       value: err?.value
+//     });
+//   }
+// };
 
 // ---------------- LIST (no pagination) ----------------
 export const listMenuItems = async (req, res) => {
