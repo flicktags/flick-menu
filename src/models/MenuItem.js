@@ -159,6 +159,8 @@ const menuItemSchema = new Schema(
     foodCategoryGroupId:          { type: String, default: null, index: true },
     foodCategoryGroupCode:        { type: String, default: "", uppercase: true, trim: true, index: true },
     foodCategoryGroupNameEnglish: { type: String, default: "", trim: true },
+    kdsStationKey: { type: String, default: "MAIN", uppercase: true, trim: true, index: true },
+
     // ------------------------------------------------------
   },
   { timestamps: true }

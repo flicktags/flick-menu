@@ -35,6 +35,8 @@ const OrderSchema = new mongoose.Schema(
         quantity: Number,
         notes: String,
         lineTotal: Number,
+        kdsStationKey: { type: String, default: "MAIN", uppercase: true, trim: true},
+
 
         // ✅ NEW: Out-of-stock support per line
         availability: {
@@ -59,23 +61,6 @@ const OrderSchema = new mongoose.Schema(
       by: { type: String, default: null },
       payload: { type: mongoose.Schema.Types.Mixed, default: null },
     },
-
-    // items: [
-    //   {
-    //     itemId: String,
-    //     nameEnglish: String,
-    //     nameArabic: String,
-    //     imageUrl: String,
-    //     isSizedBased: Boolean,
-    //     size: { label: String, price: Number },
-    //     addons: [{ id: String, label: String, price: Number }],
-    //     unitBasePrice: Number,
-    //     quantity: Number,
-    //     notes: String,
-    //     lineTotal: Number,
-    //   },
-    // ],
-
     pricing: {
       subtotal: Number,
       serviceChargePercent: Number,
@@ -148,6 +133,9 @@ OrderSchema.index({
   businessDayStartUTC: 1,
   businessDayEndUTC: 1,
 });
+OrderSchema.index({ branchId: 1, "items.kdsStationKey": 1, createdAt: -1 });
+OrderSchema.index({ branchId: 1, "items.kdsStationKey": 1, status: 1, createdAt: -1 });
+
 
 export default mongoose.model("Order", OrderSchema);
 

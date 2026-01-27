@@ -1,3 +1,4 @@
+//src/middlewares/authMiddleware.js
 import admin from "../config/firebase.js"; //
 
 export const verifyFirebaseToken = async (req, res, next) => {
