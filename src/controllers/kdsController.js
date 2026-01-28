@@ -776,10 +776,7 @@ export const ackHelpRequest = async (req, res) => {
 // ✅ OPTIONAL: if you want hashed pins, enable bcrypt
 // import bcrypt from "bcryptjs";
 
-function normStationKey(v) {
-  const s = String(v ?? "").trim();
-  return s ? s.toUpperCase() : "";
-}
+
 
 // GET /api/kds/stations?branchId=BR-000005
 function normStationKey(v) {
