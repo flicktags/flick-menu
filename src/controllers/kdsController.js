@@ -259,9 +259,11 @@ export const getKdsOverview = async (req, res) => {
 
     // ✅ validate stationKey exists in branch (only if station filter is used)
     if (isStationFiltered) {
-      const stations = Array.isArray(branch.kdsStations)
-        ? branch.kdsStations
-        : [];
+      const stations = Array.isArray(branch.stations)
+        ? branch.stations
+        : Array.isArray(branch.kdsStations)
+          ? branch.kdsStations
+          : [];
       const allowed = new Set(
         stations
           .filter((s) => s && s.isEnabled !== false)
@@ -780,6 +782,11 @@ function normStationKey(v) {
 }
 
 // GET /api/kds/stations?branchId=BR-000005
+function normStationKey(v) {
+  const s = String(v ?? "").trim();
+  return s ? s.toUpperCase() : "";
+}
+
 export const getKdsStations = async (req, res) => {
   try {
     const branchId = String(req.query.branchId || "").trim();
@@ -788,26 +795,34 @@ export const getKdsStations = async (req, res) => {
     const branch = await Branch.findOne({ branchId }).lean();
     if (!branch) return res.status(404).json({ error: "Branch not found" });
 
-    const stations = Array.isArray(branch.kdsStations)
-      ? branch.kdsStations
-      : [];
+    // ✅ YOUR REAL FIELD
+    const stationsRaw = Array.isArray(branch.stations)
+      ? branch.stations
+      : Array.isArray(branch.kdsStations)
+        ? branch.kdsStations
+        : [];
 
-    const out = stations
+    const stations = stationsRaw
       .filter((s) => s && s.isEnabled !== false)
       .map((s) => ({
+        stationId: s.stationId ?? null,
         key: normStationKey(s.key),
-        name: String(s.name || s.label || s.key || "").trim(),
-        type: String(s.type || "").trim(),
+        nameEnglish: String(
+          s.nameEnglish || s.name || s.label || s.key || "",
+        ).trim(),
+        nameArabic: String(s.nameArabic || "").trim(),
+        sortOrder: Number.isFinite(Number(s.sortOrder))
+          ? Number(s.sortOrder)
+          : 0,
+        hasPin: !!String(s.pinHash || "").trim(), // ✅ shows if PIN exists
       }))
-      .filter((s) => s.key);
-
-    // Always allow MAIN (optional UI convenience)
-    out.unshift({ key: "MAIN", name: "Main KDS", type: "MAIN" });
+      .filter((s) => s.key)
+      .sort((a, b) => a.sortOrder - b.sortOrder);
 
     return res.status(200).json({
       ok: true,
       branchId,
-      stations: out,
+      stations,
     });
   } catch (err) {
     console.error("getKdsStations error:", err);
@@ -821,57 +836,93 @@ export const loginKdsStation = async (req, res) => {
   try {
     const branchId = String(req.body?.branchId || "").trim();
     const stationKey = normStationKey(req.body?.stationKey);
-    const pin = String(req.body?.pin || "").trim();
+    const pin = String(req.body?.pin || "").trim(); // may be empty for MAIN
 
     if (!branchId) return res.status(400).json({ error: "Missing branchId" });
     if (!stationKey)
       return res.status(400).json({ error: "Missing stationKey" });
-    if (!pin) return res.status(400).json({ error: "Missing pin" });
 
-    const branch = await Branch.findOne({ branchId }).lean();
+    const branch = await Branch.findOne({ branchId });
     if (!branch) return res.status(404).json({ error: "Branch not found" });
 
-    const stations = Array.isArray(branch.kdsStations)
-      ? branch.kdsStations
-      : [];
-    const st = stations.find(
+    const stationsRaw = Array.isArray(branch.stations)
+      ? branch.stations
+      : Array.isArray(branch.kdsStations)
+        ? branch.kdsStations
+        : [];
+
+    const idx = stationsRaw.findIndex(
       (s) => normStationKey(s?.key) === stationKey && s?.isEnabled !== false,
     );
 
-    // You can optionally allow MAIN without PIN
+    if (idx < 0) {
+      return res.status(400).json({ error: "Invalid station", stationKey });
+    }
+
+    const st = stationsRaw[idx];
+
+    // ✅ MAIN: no PIN required (ignore whatever user sends)
     if (stationKey === "MAIN") {
       return res.status(200).json({
         ok: true,
         branchId,
-        station: { key: "MAIN", name: "Main KDS", type: "MAIN" },
+        station: {
+          stationId: st.stationId ?? null,
+          key: stationKey,
+          nameEnglish: st.nameEnglish || "Main",
+          nameArabic: st.nameArabic || "",
+        },
       });
     }
 
-    if (!st) {
-      return res.status(400).json({
-        error: "Invalid station",
-        stationKey,
-      });
-    }
-
-    // ✅ PIN check (simple plain PIN stored in branch.kdsStations.pin)
-    // If you store pinHash instead, replace with bcrypt.compare(pin, st.pinHash)
-    const expectedPin = String(st.pin || st.stationPin || "").trim();
-    if (!expectedPin) {
+    // ✅ For others: require pinHash + bcrypt compare
+    const hash = String(st.pinHash || "").trim();
+    if (!hash) {
       return res.status(409).json({ error: "Station PIN not configured" });
     }
+    if (!pin) {
+      return res.status(400).json({ error: "Missing pin" });
+    }
 
-    if (pin !== expectedPin) {
+    // Optional lock check (your schema has pinLockUntil)
+    const lockUntil = st.pinLockUntil ? new Date(st.pinLockUntil) : null;
+    if (lockUntil && lockUntil > new Date()) {
+      return res.status(423).json({
+        error: "Station locked",
+        lockUntil,
+      });
+    }
+
+    const ok = await bcrypt.compare(pin, hash);
+
+    if (!ok) {
+      // increment failed count (basic)
+      st.pinFailedCount = (st.pinFailedCount || 0) + 1;
+
+      // optional: lock after 5 failures for 5 minutes
+      if (st.pinFailedCount >= 5) {
+        st.pinLockUntil = new Date(Date.now() + 5 * 60 * 1000);
+        st.pinFailedCount = 0;
+      }
+
+      await branch.save();
+
       return res.status(401).json({ error: "Invalid PIN" });
     }
+
+    // ✅ reset counters on success
+    st.pinFailedCount = 0;
+    st.pinLockUntil = null;
+    await branch.save();
 
     return res.status(200).json({
       ok: true,
       branchId,
       station: {
+        stationId: st.stationId ?? null,
         key: stationKey,
-        name: String(st.name || st.label || st.key || "").trim(),
-        type: String(st.type || "").trim(),
+        nameEnglish: st.nameEnglish || st.name || st.label || stationKey,
+        nameArabic: st.nameArabic || "",
       },
     });
   } catch (err) {
