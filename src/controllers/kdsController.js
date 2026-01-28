@@ -5,11 +5,14 @@ import Branch from "../models/Branch.js";
 import Order from "../models/Order.js";
 import Qr from "../models/QrCodeOrders.js"; // ✅ or whatever your QR model file is called
 import HelpRequest from "../models/HelpRequest.js";
+import bcrypt from "bcryptjs";
 
 const DAY_KEYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 function parseRange(rangeStr) {
-  const m = /^(\d{2}):(\d{2})-(\d{2}):(\d{2})$/.exec(String(rangeStr || "").trim());
+  const m = /^(\d{2}):(\d{2})-(\d{2}):(\d{2})$/.exec(
+    String(rangeStr || "").trim(),
+  );
   if (!m) return null;
   return {
     startH: Number(m[1]),
@@ -41,7 +44,7 @@ function getDayKey(dt) {
 }
 
 function resolveCurrentShiftWindow({ openingHours, tz, now }) {
-  const nowTz = (now ? now.setZone(tz) : DateTime.now().setZone(tz));
+  const nowTz = now ? now.setZone(tz) : DateTime.now().setZone(tz);
 
   const todayKey = getDayKey(nowTz);
   const todayRange = parseRange(openingHours?.[todayKey]);
@@ -62,7 +65,7 @@ function resolveCurrentShiftWindow({ openingHours, tz, now }) {
       startTz: yWindow.start,
       endTz: yWindow.end,
       label: `${yKey} ${yWindow.start.toFormat("HH:mm")} → ${getDayKey(
-        yWindow.end
+        yWindow.end,
       )} ${yWindow.end.toFormat("HH:mm")}`,
     };
   }
@@ -72,7 +75,7 @@ function resolveCurrentShiftWindow({ openingHours, tz, now }) {
       startTz: todayWindow.start,
       endTz: todayWindow.end,
       label: `${todayKey} ${todayWindow.start.toFormat("HH:mm")} → ${getDayKey(
-        todayWindow.end
+        todayWindow.end,
       )} ${todayWindow.end.toFormat("HH:mm")}`,
     };
   }
@@ -83,27 +86,31 @@ function resolveCurrentShiftWindow({ openingHours, tz, now }) {
     startTz: start,
     endTz: end,
     label: `${todayKey} ${start.toFormat("HH:mm")} → ${getDayKey(end)} ${end.toFormat(
-      "HH:mm"
+      "HH:mm",
     )}`,
   };
 }
 
 function normalizeStatus(s) {
-  return String(s || "").trim().toLowerCase();
+  return String(s || "")
+    .trim()
+    .toLowerCase();
 }
 
 function classifyStatus(raw) {
   const s = normalizeStatus(raw);
 
   // ✅ Active tab should include your kitchen flow
-  if (["pending", "accepted", "preparing", "ready"].includes(s)) return "active";
+  if (["pending", "accepted", "preparing", "ready"].includes(s))
+    return "active";
 
   // ✅ Completed tab
   if (["served", "completed", "paid", "closed", "delivered"].includes(s))
     return "completed";
 
   // ✅ Cancelled tab
-  if (["cancelled", "canceled", "void", "rejected"].includes(s)) return "cancelled";
+  if (["cancelled", "canceled", "void", "rejected"].includes(s))
+    return "cancelled";
 
   return "active";
 }
@@ -142,7 +149,8 @@ function recomputeOrderPricing(order) {
   const vatRate = vatPercent / 100;
   const scRate = scPercent / 100;
 
-  const net = isVatInclusive && vatRate > 0 ? subtotal / (1 + vatRate) : subtotal;
+  const net =
+    isVatInclusive && vatRate > 0 ? subtotal / (1 + vatRate) : subtotal;
   const serviceChargeAmount = net * scRate;
 
   const taxable = net + serviceChargeAmount;
@@ -159,8 +167,6 @@ function recomputeOrderPricing(order) {
     grandTotal,
   };
 }
-
-
 
 // ---------- helpers for status parsing ----------
 const STATUS_CODE_TO_LABEL = {
@@ -186,7 +192,7 @@ const toLabel = (incoming) => {
 
   // try match by label value
   const found = Object.values(STATUS_CODE_TO_LABEL).find(
-    (lbl) => toCode(lbl) === code
+    (lbl) => toCode(lbl) === code,
   );
   return found || null;
 };
@@ -245,18 +251,25 @@ export const getKdsOverview = async (req, res) => {
     // ✅ optional station filter
     const stationRaw = String(req.query.station || "").trim();
     const stationKey = stationRaw ? stationRaw.toUpperCase() : ""; // "" => all
-    const isStationFiltered = stationKey.isNotEmpty && stationKey !== "ALL";
+    // const isStationFiltered = stationKey.isNotEmpty && stationKey !== "ALL";
+    const isStationFiltered = stationKey.length > 0 && stationKey !== "ALL";
 
     const branch = await Branch.findOne({ branchId }).lean();
     if (!branch) return res.status(404).json({ error: "Branch not found" });
 
     // ✅ validate stationKey exists in branch (only if station filter is used)
     if (isStationFiltered) {
-      const stations = Array.isArray(branch.kdsStations) ? branch.kdsStations : [];
+      const stations = Array.isArray(branch.kdsStations)
+        ? branch.kdsStations
+        : [];
       const allowed = new Set(
         stations
           .filter((s) => s && s.isEnabled !== false)
-          .map((s) => String(s.key || "").trim().toUpperCase())
+          .map((s) =>
+            String(s.key || "")
+              .trim()
+              .toUpperCase(),
+          )
           .filter(Boolean),
       );
       // Always allow MAIN as fallback
@@ -473,7 +486,9 @@ export const getKdsOverview = async (req, res) => {
         items: stationItems,
 
         // ✅ Optional but useful for cashier / “ALL” screen
-        stationSummary: isStationFiltered ? null : computeStationSummary(o.items || []),
+        stationSummary: isStationFiltered
+          ? null
+          : computeStationSummary(o.items || []),
 
         placedAt: o.placedAt ?? null,
         createdAt: o.createdAt ?? null,
@@ -523,219 +538,6 @@ export const getKdsOverview = async (req, res) => {
   }
 };
 
-
-// /**
-//  * GET /api/kds/overview?branchId=BR-000004
-//  */
-// export const getKdsOverview = async (req, res) => {
-//   try {
-//     const branchId = String(req.query.branchId || "").trim();
-//     if (!branchId) return res.status(400).json({ error: "Missing branchId" });
-
-//     const branch = await Branch.findOne({ branchId }).lean();
-//     if (!branch) return res.status(404).json({ error: "Branch not found" });
-
-//     const tz = String(branch.timeZone || req.query.tz || "Asia/Bahrain").trim();
-//     const openingHours = branch.openingHours || {};
-
-//     const { startTz, endTz, label } = resolveCurrentShiftWindow({
-//       openingHours,
-//       tz,
-//     });
-
-//     const fromUtc = startTz.toUTC().toJSDate();
-//     const toUtc = endTz.toUTC().toJSDate();
-
-//     const timeQuery = {
-//       $or: [
-//         { placedAt: { $gte: fromUtc, $lt: toUtc } },
-//         { createdAt: { $gte: fromUtc, $lt: toUtc } },
-//       ],
-//     };
-
-//     // ======================================================
-//     // ✅ HELP REQUESTS (CALL WAITER)
-//     // - Auto-expire old OPEN requests
-//     // - Fetch OPEN requests within shift window
-//     // ======================================================
-
-//     // Auto-expire OPEN help requests older than 30 minutes
-//     const helpExpireCutoff = new Date(Date.now() - 30 * 60 * 1000);
-//     await HelpRequest.updateMany(
-//       {
-//         branchId,
-//         status: "OPEN",
-//         createdAt: { $lte: helpExpireCutoff },
-//       },
-//       { $set: { status: "EXPIRED" } }
-//     );
-
-//     const helpRequests = await HelpRequest.find({
-//       branchId,
-//       status: "OPEN",
-//       createdAt: { $gte: fromUtc, $lt: toUtc },
-//     })
-//       .sort({ lastPingAt: -1 })
-//       .limit(100)
-//       .lean();
-
-//     // ======================================================
-//     // ✅ AUTO SERVE: READY -> SERVED after 60s
-//     // Works because KDS polls this endpoint regularly.
-//     // ======================================================
-//     const now = new Date();
-//     const cutoff = new Date(now.getTime() - 60 * 1000);
-
-//     await Order.updateMany(
-//       {
-//         branchId,
-//         ...timeQuery,
-//         status: "Ready",
-//         readyAt: { $exists: true, $lte: cutoff },
-//       },
-//       {
-//         $set: { status: "Served", servedAt: now },
-//       }
-//     );
-
-//     const orders = await Order.find({
-//       branchId,
-//       ...timeQuery,
-//     })
-//       .sort({ createdAt: -1 })
-//       .limit(500)
-//       .lean();
-
-//     // ✅ Build qrMap from QR collection (qrId -> {label,type,number})
-//     // IMPORTANT: include BOTH order qrIds and helpRequest qrIds
-//     const qrIds = [
-//       ...new Set(
-//         [
-//           ...orders.map((o) => o?.qr?.qrId),
-//           ...helpRequests.map((h) => h?.qr?.qrId),
-//         ]
-//           .filter(Boolean)
-//           .map(String)
-//       ),
-//     ];
-
-//     let qrMap = {};
-//     if (qrIds.length) {
-//       const qrs = await Qr.find(
-//         { qrId: { $in: qrIds } },
-//         { qrId: 1, label: 1, type: 1, number: 1 }
-//       ).lean();
-
-//       qrMap = qrs.reduce((acc, q) => {
-//         acc[String(q.qrId)] = q;
-//         return acc;
-//       }, {});
-//     }
-
-//     // ✅ Map help requests with enriched QR info
-//     const helpOpen = helpRequests.map((h) => {
-//       const q = h.qr || {};
-//       const qid = q?.qrId ? String(q.qrId) : "";
-//       const qrDoc = qid ? qrMap[qid] : null;
-
-//       const enrichedQr = {
-//         qrId: q.qrId ?? null,
-//         label: q.label ?? (qrDoc ? qrDoc.label : null),
-//         type: q.type ?? (qrDoc ? qrDoc.type : null),
-//         number: q.number ?? (qrDoc ? qrDoc.number : null),
-//       };
-
-//       return {
-//         id: String(h._id),
-//         vendorId: h.vendorId ?? null,
-//         branchId: h.branchId ?? null,
-//         qr: enrichedQr,
-//         message: h.message ?? null,
-//         status: h.status,
-//         pingCount: h.pingCount ?? 1,
-//         lastPingAt: h.lastPingAt ?? h.createdAt ?? null,
-//         createdAt: h.createdAt ?? null,
-//       };
-//     });
-
-//     // ======================================================
-//     // ✅ Existing order mapping (UNCHANGED)
-//     // ======================================================
-//     const active = [];
-//     const completed = [];
-//     const cancelled = [];
-
-//     for (const o of orders) {
-//       const bucket = classifyStatus(o.status);
-
-//       // ✅ Enrich QR (add label even if order.qr.label is missing)
-//       const qr = o.qr || null;
-//       const qid = qr?.qrId ? String(qr.qrId) : "";
-//       const qrDoc = qid ? qrMap[qid] : null;
-
-//       const enrichedQr = qr
-//         ? {
-//             ...qr,
-//             label: qr.label ?? (qrDoc ? qrDoc.label : null),
-//             type: qr.type ?? (qrDoc ? qrDoc.type : null),
-//             number: qr.number ?? (qrDoc ? qrDoc.number : null),
-//           }
-//         : null;
-
-//       const mapped = {
-//         id: String(o._id),
-//         orderNumber: o.orderNumber,
-//         tokenNumber: o.tokenNumber ?? null,
-//         status: o.status || "Pending",
-//         branchId: o.branchId,
-//         currency: o.currency,
-//         pricing: o.pricing || null,
-//         qr: enrichedQr, // ✅ THIS is the fix
-//         customer: o.customer || null,
-//         items: o.items || [],
-//         placedAt: o.placedAt ?? null,
-//         createdAt: o.createdAt ?? null,
-//         updatedAt: o.updatedAt ?? null,
-//         readyAt: o.readyAt ?? null,
-//         servedAt: o.servedAt ?? null,
-//       };
-
-//       if (bucket === "active") active.push(mapped);
-//       else if (bucket === "completed") completed.push(mapped);
-//       else cancelled.push(mapped);
-//     }
-
-//     // ✅ RETURN (add help without changing existing fields)
-//     return res.status(200).json({
-//       shift: {
-//         tz,
-//         from: startTz.toISO(),
-//         to: endTz.toISO(),
-//         label,
-//       },
-//       counts: {
-//         active: active.length,
-//         completed: completed.length,
-//         cancelled: cancelled.length,
-//         total: orders.length,
-//       },
-
-//       // ✅ NEW: help section (safe additive change)
-//       help: {
-//         openCount: helpOpen.length,
-//         open: helpOpen,
-//       },
-
-//       active,
-//       completed,
-//       cancelled,
-//     });
-//   } catch (err) {
-//     console.error("getKdsOverview error:", err);
-//     return res.status(500).json({ error: err.message || "Server error" });
-//   }
-// };
-
 /**
  * PATCH /api/kds/orders/:id/status
  * Body: { status: "READY" | "Ready" | "Preparing" ... , branchId? }
@@ -750,7 +552,9 @@ export const updateKdsOrderStatus = async (req, res) => {
     }
     if (!incoming) return res.status(400).json({ error: "Missing status" });
 
-    const branchId = String(req.body?.branchId || req.query.branchId || "").trim();
+    const branchId = String(
+      req.body?.branchId || req.query.branchId || "",
+    ).trim();
 
     const nextStatusLabel = toLabel(incoming);
     if (!nextStatusLabel) {
@@ -817,9 +621,13 @@ export const updateKdsOrderItemAvailability = async (req, res) => {
     const id = String(req.params.id || "").trim();
     const lineId = String(req.params.lineId || "").trim();
 
-    const availability = String(req.body?.availability || "").trim().toUpperCase();
+    const availability = String(req.body?.availability || "")
+      .trim()
+      .toUpperCase();
     const reason = String(req.body?.reason || "").trim();
-    const branchId = String(req.body?.branchId || req.query.branchId || "").trim();
+    const branchId = String(
+      req.body?.branchId || req.query.branchId || "",
+    ).trim();
 
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ error: "Invalid order id" });
@@ -841,7 +649,9 @@ export const updateKdsOrderItemAvailability = async (req, res) => {
     // block terminal orders
     const cur = String(order.status || "").toLowerCase();
     if (["completed", "cancelled", "canceled", "rejected"].includes(cur)) {
-      return res.status(409).json({ error: "Order is terminal; cannot amend items" });
+      return res
+        .status(409)
+        .json({ error: "Order is terminal; cannot amend items" });
     }
 
     const it = order.items?.id(lineId);
@@ -873,7 +683,10 @@ export const updateKdsOrderItemAvailability = async (req, res) => {
       payload: {
         lineId,
         availability,
-        reason: availability === "OUT_OF_STOCK" ? (it.unavailableReason || reason || null) : null,
+        reason:
+          availability === "OUT_OF_STOCK"
+            ? it.unavailableReason || reason || null
+            : null,
       },
     };
 
@@ -901,7 +714,6 @@ export const updateKdsOrderItemAvailability = async (req, res) => {
   }
 };
 
-
 /**
  * PATCH /api/kds/help/:id/ack
  * Body: { branchId: "BR-000004" }
@@ -910,7 +722,9 @@ export const updateKdsOrderItemAvailability = async (req, res) => {
 export const ackHelpRequest = async (req, res) => {
   try {
     const id = String(req.params.id || "").trim();
-    const branchId = String(req.body?.branchId || req.query.branchId || "").trim();
+    const branchId = String(
+      req.body?.branchId || req.query.branchId || "",
+    ).trim();
 
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ error: "Invalid help id" });
@@ -953,6 +767,115 @@ export const ackHelpRequest = async (req, res) => {
     });
   } catch (err) {
     console.error("ackHelpRequest error:", err);
+    return res.status(500).json({ error: err.message || "Server error" });
+  }
+};
+
+// ✅ OPTIONAL: if you want hashed pins, enable bcrypt
+// import bcrypt from "bcryptjs";
+
+function normStationKey(v) {
+  const s = String(v ?? "").trim();
+  return s ? s.toUpperCase() : "";
+}
+
+// GET /api/kds/stations?branchId=BR-000005
+export const getKdsStations = async (req, res) => {
+  try {
+    const branchId = String(req.query.branchId || "").trim();
+    if (!branchId) return res.status(400).json({ error: "Missing branchId" });
+
+    const branch = await Branch.findOne({ branchId }).lean();
+    if (!branch) return res.status(404).json({ error: "Branch not found" });
+
+    const stations = Array.isArray(branch.kdsStations)
+      ? branch.kdsStations
+      : [];
+
+    const out = stations
+      .filter((s) => s && s.isEnabled !== false)
+      .map((s) => ({
+        key: normStationKey(s.key),
+        name: String(s.name || s.label || s.key || "").trim(),
+        type: String(s.type || "").trim(),
+      }))
+      .filter((s) => s.key);
+
+    // Always allow MAIN (optional UI convenience)
+    out.unshift({ key: "MAIN", name: "Main KDS", type: "MAIN" });
+
+    return res.status(200).json({
+      ok: true,
+      branchId,
+      stations: out,
+    });
+  } catch (err) {
+    console.error("getKdsStations error:", err);
+    return res.status(500).json({ error: err.message || "Server error" });
+  }
+};
+
+// POST /api/kds/stations/login
+// Body: { branchId, stationKey, pin }
+export const loginKdsStation = async (req, res) => {
+  try {
+    const branchId = String(req.body?.branchId || "").trim();
+    const stationKey = normStationKey(req.body?.stationKey);
+    const pin = String(req.body?.pin || "").trim();
+
+    if (!branchId) return res.status(400).json({ error: "Missing branchId" });
+    if (!stationKey)
+      return res.status(400).json({ error: "Missing stationKey" });
+    if (!pin) return res.status(400).json({ error: "Missing pin" });
+
+    const branch = await Branch.findOne({ branchId }).lean();
+    if (!branch) return res.status(404).json({ error: "Branch not found" });
+
+    const stations = Array.isArray(branch.kdsStations)
+      ? branch.kdsStations
+      : [];
+    const st = stations.find(
+      (s) => normStationKey(s?.key) === stationKey && s?.isEnabled !== false,
+    );
+
+    // You can optionally allow MAIN without PIN
+    if (stationKey === "MAIN") {
+      return res.status(200).json({
+        ok: true,
+        branchId,
+        station: { key: "MAIN", name: "Main KDS", type: "MAIN" },
+      });
+    }
+
+    if (!st) {
+      return res.status(400).json({
+        error: "Invalid station",
+        stationKey,
+      });
+    }
+
+    // ✅ PIN check (simple plain PIN stored in branch.kdsStations.pin)
+    // If you store pinHash instead, replace with bcrypt.compare(pin, st.pinHash)
+    const expectedPin = String(st.pin || st.stationPin || "").trim();
+    if (!expectedPin) {
+      return res.status(409).json({ error: "Station PIN not configured" });
+    }
+
+    if (pin !== expectedPin) {
+      return res.status(401).json({ error: "Invalid PIN" });
+    }
+
+    return res.status(200).json({
+      ok: true,
+      branchId,
+      station: {
+        key: stationKey,
+        name: String(st.name || st.label || st.key || "").trim(),
+        type: String(st.type || "").trim(),
+      },
+    });
+  } catch (err) {
+    console.error("loginKdsStation error:", err);
     return res.status(500).json({ error: err.message || "Server error" });
   }
 };

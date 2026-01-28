@@ -6,6 +6,8 @@ import {
   updateKdsOrderStatus,
   ackHelpRequest,
   updateKdsOrderItemAvailability,
+  getKdsStations,
+  loginKdsStation,
 } from "../controllers/kdsController.js";
 
 const router = express.Router();
@@ -19,5 +21,7 @@ router.patch(
   verifyFirebaseToken,
   updateKdsOrderItemAvailability,
 );
+router.get("/stations", verifyFirebaseToken, getKdsStations);
+router.post("/stations/login", verifyFirebaseToken, loginKdsStation);
 
 export default router;
