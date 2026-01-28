@@ -295,7 +295,7 @@ export const getKdsOverview = async (req, res) => {
       String(req.query.station || "").trim();
 
     const stationKey = stationRaw ? stationRaw.toUpperCase() : "";
-    const isStationFiltered = stationKey.length > 0 && stationKey !== "ALL";
+    const isStationFiltered = stationKey.length > 0 && stationKey !== "ALL" && stationKey !== "MAIN";
 
     const branch = await Branch.findOne({ branchId }).lean();
     if (!branch) return res.status(404).json({ error: "Branch not found" });
