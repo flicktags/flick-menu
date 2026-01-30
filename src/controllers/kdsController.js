@@ -398,6 +398,52 @@ export const getKdsOverview = async (req, res) => {
       },
     );
 
+    if (isStationFiltered) {
+      const sk = stationKey; // already uppercase
+      const toAutoServe = await Order.find({
+        branchId,
+        ...timeQuery,
+        items: {
+          $elemMatch: {
+            kdsStatus: "READY",
+            kdsStatusUpdatedAt: { $exists: true, $lte: cutoff },
+            kdsStationKey: sk, // station-scoped auto-serve
+          },
+        },
+      }).limit(300);
+
+      for (const ord of toAutoServe) {
+        let changed = 0;
+
+        for (const it of ord.items || []) {
+          const station = String(it?.kdsStationKey || "MAIN")
+            .trim()
+            .toUpperCase();
+          if (station !== sk) continue;
+
+          const code = String(it?.kdsStatus || "PENDING")
+            .trim()
+            .toUpperCase();
+          const updatedAt = it?.kdsStatusUpdatedAt
+            ? new Date(it.kdsStatusUpdatedAt)
+            : null;
+
+          if (code === "READY" && updatedAt && updatedAt <= cutoff) {
+            it.kdsStatus = "SERVED";
+            it.kdsStatusUpdatedAt = now;
+            it.kdsStatusUpdatedBy = "AUTO_SERVE";
+            changed++;
+          }
+        }
+
+        if (changed > 0) {
+          // Optional but recommended so devices refresh
+          ord.revision = (ord.revision || 0) + 1;
+          await ord.save();
+        }
+      }
+    }
+
     const orders = await Order.find({
       branchId,
       ...timeQuery,
@@ -466,86 +512,88 @@ export const getKdsOverview = async (req, res) => {
     const cancelled = [];
 
     for (const o of orders) {
-  const bucket = classifyStatus(o.status);
+      const bucket = classifyStatus(o.status);
 
-  // ✅ Backward compatibility: treat missing kdsStatus as PENDING (PER ORDER)
-  const safeItems = (Array.isArray(o.items) ? o.items : []).map((it) => ({
-    ...it,
-    kdsStatus: it?.kdsStatus ? String(it.kdsStatus).toUpperCase() : "PENDING",
-  }));
+      // ✅ Backward compatibility: treat missing kdsStatus as PENDING (PER ORDER)
+      const safeItems = (Array.isArray(o.items) ? o.items : []).map((it) => ({
+        ...it,
+        kdsStatus: it?.kdsStatus
+          ? String(it.kdsStatus).toUpperCase()
+          : "PENDING",
+      }));
 
-  // ✅ Enrich QR (add label even if order.qr.label is missing)
-  const qr = o.qr || null;
-  const qid = qr?.qrId ? String(qr.qrId) : "";
-  const qrDoc = qid ? qrMap[qid] : null;
+      // ✅ Enrich QR (add label even if order.qr.label is missing)
+      const qr = o.qr || null;
+      const qid = qr?.qrId ? String(qr.qrId) : "";
+      const qrDoc = qid ? qrMap[qid] : null;
 
-  const enrichedQr = qr
-    ? {
-        ...qr,
-        label: qr.label ?? (qrDoc ? qrDoc.label : null),
-        type: qr.type ?? (qrDoc ? qrDoc.type : null),
-        number: qr.number ?? (qrDoc ? qrDoc.number : null),
-      }
-    : null;
+      const enrichedQr = qr
+        ? {
+            ...qr,
+            label: qr.label ?? (qrDoc ? qrDoc.label : null),
+            type: qr.type ?? (qrDoc ? qrDoc.type : null),
+            number: qr.number ?? (qrDoc ? qrDoc.number : null),
+          }
+        : null;
 
-  // ✅ station-filtered items (use safeItems, not o.items)
-  const stationItems = filterItemsForStation(
-    safeItems,
-    stationKey,
-    isStationFiltered,
-  );
+      // ✅ station-filtered items (use safeItems, not o.items)
+      const stationItems = filterItemsForStation(
+        safeItems,
+        stationKey,
+        isStationFiltered,
+      );
 
-  // If station filter is enabled and this order has no items for that station, skip it.
-  if (isStationFiltered && stationItems.length === 0) continue;
+      // If station filter is enabled and this order has no items for that station, skip it.
+      if (isStationFiltered && stationItems.length === 0) continue;
 
-  // ✅ pricing: for station views, recompute totals from stationItems
-  // NOTE: we don't mutate DB; we only mutate the response object.
-  const pricingForResponse = (() => {
-    if (!isStationFiltered) return o.pricing || null;
-    const clone = {
-      pricing: { ...(o.pricing || {}) },
-      items: stationItems,
-    };
-    recomputeOrderPricing(clone);
-    return clone.pricing;
-  })();
+      // ✅ pricing: for station views, recompute totals from stationItems
+      // NOTE: we don't mutate DB; we only mutate the response object.
+      const pricingForResponse = (() => {
+        if (!isStationFiltered) return o.pricing || null;
+        const clone = {
+          pricing: { ...(o.pricing || {}) },
+          items: stationItems,
+        };
+        recomputeOrderPricing(clone);
+        return clone.pricing;
+      })();
 
-  // ✅ stationSummary:
-  // - ALL view: summary over ALL items (use safeItems so missing kdsStatus doesn't break)
-  // - station view: summary over station items
-  const stationSummaryForResponse = computeStationSummary(
-    isStationFiltered ? stationItems : safeItems,
-  );
+      // ✅ stationSummary:
+      // - ALL view: summary over ALL items (use safeItems so missing kdsStatus doesn't break)
+      // - station view: summary over station items
+      const stationSummaryForResponse = computeStationSummary(
+        isStationFiltered ? stationItems : safeItems,
+      );
 
-  const mapped = {
-    id: String(o._id),
-    orderNumber: o.orderNumber,
-    tokenNumber: o.tokenNumber ?? null,
-    status: o.status || "Pending",
-    branchId: o.branchId,
-    currency: o.currency,
+      const mapped = {
+        id: String(o._id),
+        orderNumber: o.orderNumber,
+        tokenNumber: o.tokenNumber ?? null,
+        status: o.status || "Pending",
+        branchId: o.branchId,
+        currency: o.currency,
 
-    pricing: pricingForResponse,
+        pricing: pricingForResponse,
 
-    qr: enrichedQr,
-    customer: o.customer || null,
+        qr: enrichedQr,
+        customer: o.customer || null,
 
-    // ✅ IMPORTANT: station view returns only station items
-    items: stationItems,
+        // ✅ IMPORTANT: station view returns only station items
+        items: stationItems,
 
-    stationSummary: stationSummaryForResponse,
+        stationSummary: stationSummaryForResponse,
 
-    placedAt: o.placedAt ?? null,
-    createdAt: o.createdAt ?? null,
-    updatedAt: o.updatedAt ?? null,
-    readyAt: o.readyAt ?? null,
-    servedAt: o.servedAt ?? null,
-  };
+        placedAt: o.placedAt ?? null,
+        createdAt: o.createdAt ?? null,
+        updatedAt: o.updatedAt ?? null,
+        readyAt: o.readyAt ?? null,
+        servedAt: o.servedAt ?? null,
+      };
 
-  if (bucket === "active") active.push(mapped);
-  else if (bucket === "completed") completed.push(mapped);
-  else cancelled.push(mapped);
-}
+      if (bucket === "active") active.push(mapped);
+      else if (bucket === "completed") completed.push(mapped);
+      else cancelled.push(mapped);
+    }
 
     // for (const o of orders) {
     //   const bucket = classifyStatus(o.status);
