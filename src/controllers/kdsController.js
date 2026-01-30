@@ -272,6 +272,12 @@ function computeStationSummary(items) {
   }));
 }
 
+// ✅ Backward compatibility: treat missing kdsStatus as PENDING
+const safeItems = (o.items || []).map((it) => ({
+  ...it,
+  kdsStatus: it?.kdsStatus ? String(it.kdsStatus).toUpperCase() : "PENDING",
+}));
+
 function filterItemsForStation(items, stationKey, isStationFiltered) {
   const list = Array.isArray(items) ? items : [];
   if (!isStationFiltered) return list;
@@ -295,7 +301,8 @@ export const getKdsOverview = async (req, res) => {
       String(req.query.station || "").trim();
 
     const stationKey = stationRaw ? stationRaw.toUpperCase() : "";
-    const isStationFiltered = stationKey.length > 0 && stationKey !== "ALL" && stationKey !== "MAIN";
+    const isStationFiltered =
+      stationKey.length > 0 && stationKey !== "ALL" && stationKey !== "MAIN";
 
     const branch = await Branch.findOne({ branchId }).lean();
     if (!branch) return res.status(404).json({ error: "Branch not found" });
@@ -475,8 +482,13 @@ export const getKdsOverview = async (req, res) => {
         : null;
 
       // ✅ station-filtered items
+      // const stationItems = filterItemsForStation(
+      //   o.items || [],
+      //   stationKey,
+      //   isStationFiltered,
+      // );
       const stationItems = filterItemsForStation(
-        o.items || [],
+        safeItems,
         stationKey,
         isStationFiltered,
       );
@@ -572,24 +584,41 @@ export const getKdsOverview = async (req, res) => {
  * PATCH /api/kds/orders/:id/status
  * Body: { status: "READY" | "Ready" | "Preparing" ... , branchId? }
  */
+/**
+ * PATCH /api/kds/orders/:id/status
+ * Body: { status: "PREPARING" | "READY" | ... , branchId?, stationKey? }
+ *
+ * ✅ stationKey behavior:
+ * - stationKey=BAR (station view) -> update ONLY items whose kdsStationKey=BAR
+ * - stationKey=ALL or MAIN or missing -> update ALL items (global action)
+ */
 export const updateKdsOrderStatus = async (req, res) => {
   try {
     const id = String(req.params.id || "").trim();
     const incoming = String(req.body?.status || "").trim();
+    const branchId = String(
+      req.body?.branchId || req.query.branchId || "",
+    ).trim();
+
+    const stationRaw =
+      String(req.body?.stationKey || "").trim() ||
+      String(req.query.stationKey || "").trim() ||
+      String(req.query.station || "").trim();
+
+    const stationKey = stationRaw ? stationRaw.toUpperCase() : "";
+    const isStationScoped =
+      stationKey && stationKey !== "ALL" && stationKey !== "MAIN";
 
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ error: "Invalid order id" });
     }
     if (!incoming) return res.status(400).json({ error: "Missing status" });
 
-    const branchId = String(
-      req.body?.branchId || req.query.branchId || "",
-    ).trim();
-
-    const nextStatusLabel = toLabel(incoming);
-    if (!nextStatusLabel) {
+    const nextLabel = toLabel(incoming);
+    if (!nextLabel) {
       return res.status(400).json({ error: "Invalid status value" });
     }
+    const nextCode = toCode(nextLabel); // PREPARING/READY/...
 
     const order = await Order.findById(id);
     if (!order) return res.status(404).json({ error: "Order not found" });
@@ -598,41 +627,91 @@ export const updateKdsOrderStatus = async (req, res) => {
       return res.status(403).json({ error: "Branch mismatch" });
     }
 
-    const currentLabel = String(order.status || "Pending").trim();
+    // block terminal orders
+    const curOrder = String(order.status || "").toLowerCase();
+    if (["completed", "cancelled", "canceled", "rejected"].includes(curOrder)) {
+      return res
+        .status(409)
+        .json({ error: "Order is terminal; cannot update" });
+    }
 
-    // ✅ transition rules
-    if (!canTransition(currentLabel, nextStatusLabel)) {
+    const now = new Date();
+    const userId = req.user?.uid || req.user?.email || req.user?.sub || null;
+
+    // ✅ choose which lines this request is allowed to modify
+    const allItems = Array.isArray(order.items) ? order.items : [];
+    const targetItems = isStationScoped
+      ? allItems.filter(
+          (it) => normStationFromItem(it?.kdsStationKey) === stationKey,
+        )
+      : allItems;
+
+    if (isStationScoped && targetItems.length === 0) {
       return res.status(409).json({
-        error: "Invalid status transition",
-        from: currentLabel,
-        to: nextStatusLabel,
+        error: "No items for this station in the order",
+        stationKey,
       });
     }
 
-    // ✅ If moving to READY, stamp readyAt
-    const nextCode = toCode(nextStatusLabel);
-    const now = new Date();
+    // ✅ apply transition per-line (not whole order)
+    let changedCount = 0;
 
-    order.status = nextStatusLabel;
+    for (const it of targetItems) {
+      // treat missing kdsStatus as PENDING (backward compatible)
+      const curLineCode = normLineStatus(it?.kdsStatus);
+      const curLineLabel = toLabel(curLineCode) || "Pending";
 
-    if (nextCode === "READY") {
+      // allow idempotent, and validate transition per item
+      if (canTransition(curLineLabel, nextLabel)) {
+        const before = normLineStatus(it.kdsStatus);
+        it.kdsStatus = nextCode;
+        it.kdsStatusUpdatedAt = now;
+        it.kdsStatusUpdatedBy = userId;
+
+        if (before !== nextCode) changedCount++;
+      }
+    }
+
+    if (changedCount === 0) {
+      return res.status(409).json({
+        error:
+          "No line items were updated (transition blocked or already same status)",
+        stationKey: isStationScoped ? stationKey : "ALL",
+        to: nextLabel,
+      });
+    }
+
+    // ✅ derive order.status from line statuses (so customer/admin stays correct)
+    const derivedLabel = deriveOrderStatusFromLines(order.items || []);
+    const derivedCode = toCode(derivedLabel);
+
+    // keep your existing timestamps logic BUT only when derived status reaches those stages
+    order.status = derivedLabel;
+
+    if (derivedCode === "READY") {
       if (!order.readyAt) order.readyAt = now;
     }
 
-    if (nextCode === "SERVED") {
+    if (derivedCode === "SERVED") {
       if (!order.servedAt) order.servedAt = now;
     }
+
+    // optional: bump revision so KDS devices refresh attention, but NOT required
+    // order.revision = (order.revision || 0) + 1;
 
     await order.save();
 
     return res.status(200).json({
-      message: "Status updated",
+      message: "Line status updated",
+      scope: isStationScoped ? { stationKey } : { stationKey: "ALL" },
+      changedCount,
       order: {
         id: String(order._id),
         status: order.status,
         readyAt: order.readyAt ?? null,
         servedAt: order.servedAt ?? null,
         updatedAt: order.updatedAt ?? null,
+        revision: order.revision ?? 0,
       },
     });
   } catch (err) {
@@ -640,6 +719,139 @@ export const updateKdsOrderStatus = async (req, res) => {
     return res.status(500).json({ error: err.message || "Server error" });
   }
 };
+
+// --------------------------
+// Helpers for per-line status
+// --------------------------
+function normLineStatus(v) {
+  const s = String(v || "")
+    .trim()
+    .toUpperCase();
+  return s || "PENDING";
+}
+
+/**
+ * ✅ Derive the order-level label from line statuses.
+ * Logic:
+ * - Ignore cancelled/rejected lines when calculating progress (unless all lines are cancelled/rejected)
+ * - If any active line pending -> Pending
+ * - Else if any active line preparing -> Preparing
+ * - Else if any active line ready -> Ready
+ * - Else if any active line served -> Served
+ * - Else -> Completed
+ */
+function deriveOrderStatusFromLines(items) {
+  const list = Array.isArray(items) ? items : [];
+  if (list.length === 0) return "Pending";
+
+  const codes = list.map((it) => normLineStatus(it?.kdsStatus));
+
+  const isLineTerminal = (c) => ["CANCELLED", "REJECTED"].includes(c);
+
+  const active = codes.filter((c) => !isLineTerminal(c));
+
+  // if all lines terminal
+  if (active.length === 0) {
+    const allRejected = codes.every((c) => c === "REJECTED");
+    return allRejected ? "Rejected" : "Cancelled";
+  }
+
+  const rank = (c) => {
+    switch (c) {
+      case "PENDING":
+        return 1;
+      case "PREPARING":
+        return 2;
+      case "READY":
+        return 3;
+      case "SERVED":
+        return 4;
+      case "COMPLETED":
+        return 5;
+      default:
+        return 1;
+    }
+  };
+
+  // choose minimum progress among active lines (so order stays pending until all accepted)
+  let min = 99;
+  for (const c of active) min = Math.min(min, rank(c));
+
+  if (min === 1) return "Pending";
+  if (min === 2) return "Preparing";
+  if (min === 3) return "Ready";
+  if (min === 4) return "Served";
+  return "Completed";
+}
+
+// export const updateKdsOrderStatus = async (req, res) => {
+//   try {
+//     const id = String(req.params.id || "").trim();
+//     const incoming = String(req.body?.status || "").trim();
+
+//     if (!mongoose.Types.ObjectId.isValid(id)) {
+//       return res.status(400).json({ error: "Invalid order id" });
+//     }
+//     if (!incoming) return res.status(400).json({ error: "Missing status" });
+
+//     const branchId = String(
+//       req.body?.branchId || req.query.branchId || "",
+//     ).trim();
+
+//     const nextStatusLabel = toLabel(incoming);
+//     if (!nextStatusLabel) {
+//       return res.status(400).json({ error: "Invalid status value" });
+//     }
+
+//     const order = await Order.findById(id);
+//     if (!order) return res.status(404).json({ error: "Order not found" });
+
+//     if (branchId && String(order.branchId || "") !== branchId) {
+//       return res.status(403).json({ error: "Branch mismatch" });
+//     }
+
+//     const currentLabel = String(order.status || "Pending").trim();
+
+//     // ✅ transition rules
+//     if (!canTransition(currentLabel, nextStatusLabel)) {
+//       return res.status(409).json({
+//         error: "Invalid status transition",
+//         from: currentLabel,
+//         to: nextStatusLabel,
+//       });
+//     }
+
+//     // ✅ If moving to READY, stamp readyAt
+//     const nextCode = toCode(nextStatusLabel);
+//     const now = new Date();
+
+//     order.status = nextStatusLabel;
+
+//     if (nextCode === "READY") {
+//       if (!order.readyAt) order.readyAt = now;
+//     }
+
+//     if (nextCode === "SERVED") {
+//       if (!order.servedAt) order.servedAt = now;
+//     }
+
+//     await order.save();
+
+//     return res.status(200).json({
+//       message: "Status updated",
+//       order: {
+//         id: String(order._id),
+//         status: order.status,
+//         readyAt: order.readyAt ?? null,
+//         servedAt: order.servedAt ?? null,
+//         updatedAt: order.updatedAt ?? null,
+//       },
+//     });
+//   } catch (err) {
+//     console.error("updateKdsOrderStatus error:", err);
+//     return res.status(500).json({ error: err.message || "Server error" });
+//   }
+// };
 
 /**
  * PATCH /api/kds/orders/:id/items/:lineId/availability
@@ -943,7 +1155,6 @@ export const loginKdsStation = async (req, res) => {
     return res.status(500).json({ error: err.message || "Server error" });
   }
 };
-
 
 // // src/controllers/kdsController.js
 // import { DateTime } from "luxon";
@@ -1722,8 +1933,6 @@ export const loginKdsStation = async (req, res) => {
 
 // // ✅ OPTIONAL: if you want hashed pins, enable bcrypt
 // // import bcrypt from "bcryptjs";
-
-
 
 // // GET /api/kds/stations?branchId=BR-000005
 // function normStationKey(v) {
