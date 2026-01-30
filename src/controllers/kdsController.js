@@ -272,11 +272,12 @@ function computeStationSummary(items) {
   }));
 }
 
-// ✅ Backward compatibility: treat missing kdsStatus as PENDING
-const safeItems = (o.items || []).map((it) => ({
-  ...it,
-  kdsStatus: it?.kdsStatus ? String(it.kdsStatus).toUpperCase() : "PENDING",
-}));
+// // ✅ Backward compatibility: treat missing kdsStatus as PENDING
+// // ✅ Backward compatibility: treat missing kdsStatus as PENDING
+// const safeItems = (order.items || []).map((it) => ({
+//   ...it,
+//   kdsStatus: it?.kdsStatus ? String(it.kdsStatus).toUpperCase() : "PENDING",
+// }));
 
 function filterItemsForStation(items, stationKey, isStationFiltered) {
   const list = Array.isArray(items) ? items : [];
@@ -465,85 +466,173 @@ export const getKdsOverview = async (req, res) => {
     const cancelled = [];
 
     for (const o of orders) {
-      const bucket = classifyStatus(o.status);
+  const bucket = classifyStatus(o.status);
 
-      // ✅ Enrich QR (add label even if order.qr.label is missing)
-      const qr = o.qr || null;
-      const qid = qr?.qrId ? String(qr.qrId) : "";
-      const qrDoc = qid ? qrMap[qid] : null;
+  // ✅ Backward compatibility: treat missing kdsStatus as PENDING (PER ORDER)
+  const safeItems = (Array.isArray(o.items) ? o.items : []).map((it) => ({
+    ...it,
+    kdsStatus: it?.kdsStatus ? String(it.kdsStatus).toUpperCase() : "PENDING",
+  }));
 
-      const enrichedQr = qr
-        ? {
-            ...qr,
-            label: qr.label ?? (qrDoc ? qrDoc.label : null),
-            type: qr.type ?? (qrDoc ? qrDoc.type : null),
-            number: qr.number ?? (qrDoc ? qrDoc.number : null),
-          }
-        : null;
+  // ✅ Enrich QR (add label even if order.qr.label is missing)
+  const qr = o.qr || null;
+  const qid = qr?.qrId ? String(qr.qrId) : "";
+  const qrDoc = qid ? qrMap[qid] : null;
 
-      // ✅ station-filtered items
-      // const stationItems = filterItemsForStation(
-      //   o.items || [],
-      //   stationKey,
-      //   isStationFiltered,
-      // );
-      const stationItems = filterItemsForStation(
-        safeItems,
-        stationKey,
-        isStationFiltered,
-      );
+  const enrichedQr = qr
+    ? {
+        ...qr,
+        label: qr.label ?? (qrDoc ? qrDoc.label : null),
+        type: qr.type ?? (qrDoc ? qrDoc.type : null),
+        number: qr.number ?? (qrDoc ? qrDoc.number : null),
+      }
+    : null;
 
-      // If station filter is enabled and this order has no items for that station, skip it.
-      if (isStationFiltered && stationItems.length === 0) continue;
+  // ✅ station-filtered items (use safeItems, not o.items)
+  const stationItems = filterItemsForStation(
+    safeItems,
+    stationKey,
+    isStationFiltered,
+  );
 
-      // ✅ pricing: for station views, recompute totals from stationItems
-      // NOTE: we don't mutate DB; we only mutate the response object.
-      const pricingForResponse = (() => {
-        if (!isStationFiltered) return o.pricing || null;
-        const clone = {
-          pricing: { ...(o.pricing || {}) },
-          items: stationItems,
-        };
-        recomputeOrderPricing(clone);
-        return clone.pricing;
-      })();
+  // If station filter is enabled and this order has no items for that station, skip it.
+  if (isStationFiltered && stationItems.length === 0) continue;
 
-      // ✅ stationSummary:
-      // - ALL view: summary over ALL items
-      // - station view: summary over station items (usually 1 entry)
-      const stationSummaryForResponse = computeStationSummary(
-        isStationFiltered ? stationItems : o.items || [],
-      );
+  // ✅ pricing: for station views, recompute totals from stationItems
+  // NOTE: we don't mutate DB; we only mutate the response object.
+  const pricingForResponse = (() => {
+    if (!isStationFiltered) return o.pricing || null;
+    const clone = {
+      pricing: { ...(o.pricing || {}) },
+      items: stationItems,
+    };
+    recomputeOrderPricing(clone);
+    return clone.pricing;
+  })();
 
-      const mapped = {
-        id: String(o._id),
-        orderNumber: o.orderNumber,
-        tokenNumber: o.tokenNumber ?? null,
-        status: o.status || "Pending",
-        branchId: o.branchId,
-        currency: o.currency,
+  // ✅ stationSummary:
+  // - ALL view: summary over ALL items (use safeItems so missing kdsStatus doesn't break)
+  // - station view: summary over station items
+  const stationSummaryForResponse = computeStationSummary(
+    isStationFiltered ? stationItems : safeItems,
+  );
 
-        pricing: pricingForResponse,
+  const mapped = {
+    id: String(o._id),
+    orderNumber: o.orderNumber,
+    tokenNumber: o.tokenNumber ?? null,
+    status: o.status || "Pending",
+    branchId: o.branchId,
+    currency: o.currency,
 
-        qr: enrichedQr,
-        customer: o.customer || null,
+    pricing: pricingForResponse,
 
-        // ✅ IMPORTANT: station view returns only station items
-        items: stationItems,
+    qr: enrichedQr,
+    customer: o.customer || null,
 
-        stationSummary: stationSummaryForResponse,
+    // ✅ IMPORTANT: station view returns only station items
+    items: stationItems,
 
-        placedAt: o.placedAt ?? null,
-        createdAt: o.createdAt ?? null,
-        updatedAt: o.updatedAt ?? null,
-        readyAt: o.readyAt ?? null,
-        servedAt: o.servedAt ?? null,
-      };
+    stationSummary: stationSummaryForResponse,
 
-      if (bucket === "active") active.push(mapped);
-      else if (bucket === "completed") completed.push(mapped);
-      else cancelled.push(mapped);
-    }
+    placedAt: o.placedAt ?? null,
+    createdAt: o.createdAt ?? null,
+    updatedAt: o.updatedAt ?? null,
+    readyAt: o.readyAt ?? null,
+    servedAt: o.servedAt ?? null,
+  };
+
+  if (bucket === "active") active.push(mapped);
+  else if (bucket === "completed") completed.push(mapped);
+  else cancelled.push(mapped);
+}
+
+    // for (const o of orders) {
+    //   const bucket = classifyStatus(o.status);
+
+    //   const safeItems = (Array.isArray(o.items) ? o.items : []).map((it) => ({
+    //     ...it,
+    //     kdsStatus: it?.kdsStatus
+    //       ? String(it.kdsStatus).toUpperCase()
+    //       : "PENDING",
+    //   }));
+    //   // ✅ Enrich QR (add label even if order.qr.label is missing)
+    //   const qr = o.qr || null;
+    //   const qid = qr?.qrId ? String(qr.qrId) : "";
+    //   const qrDoc = qid ? qrMap[qid] : null;
+
+    //   const enrichedQr = qr
+    //     ? {
+    //         ...qr,
+    //         label: qr.label ?? (qrDoc ? qrDoc.label : null),
+    //         type: qr.type ?? (qrDoc ? qrDoc.type : null),
+    //         number: qr.number ?? (qrDoc ? qrDoc.number : null),
+    //       }
+    //     : null;
+
+    //   // ✅ station-filtered items
+    //   // const stationItems = filterItemsForStation(
+    //   //   o.items || [],
+    //   //   stationKey,
+    //   //   isStationFiltered,
+    //   // );
+    //   const stationItems = filterItemsForStation(
+    //     safeItems,
+    //     stationKey,
+    //     isStationFiltered,
+    //   );
+
+    //   // If station filter is enabled and this order has no items for that station, skip it.
+    //   if (isStationFiltered && stationItems.length === 0) continue;
+
+    //   // ✅ pricing: for station views, recompute totals from stationItems
+    //   // NOTE: we don't mutate DB; we only mutate the response object.
+    //   const pricingForResponse = (() => {
+    //     if (!isStationFiltered) return o.pricing || null;
+    //     const clone = {
+    //       pricing: { ...(o.pricing || {}) },
+    //       items: stationItems,
+    //     };
+    //     recomputeOrderPricing(clone);
+    //     return clone.pricing;
+    //   })();
+
+    //   // ✅ stationSummary:
+    //   // - ALL view: summary over ALL items
+    //   // - station view: summary over station items (usually 1 entry)
+    //   const stationSummaryForResponse = computeStationSummary(
+    //     isStationFiltered ? stationItems : o.items || [],
+    //   );
+
+    //   const mapped = {
+    //     id: String(o._id),
+    //     orderNumber: o.orderNumber,
+    //     tokenNumber: o.tokenNumber ?? null,
+    //     status: o.status || "Pending",
+    //     branchId: o.branchId,
+    //     currency: o.currency,
+
+    //     pricing: pricingForResponse,
+
+    //     qr: enrichedQr,
+    //     customer: o.customer || null,
+
+    //     // ✅ IMPORTANT: station view returns only station items
+    //     items: stationItems,
+
+    //     stationSummary: stationSummaryForResponse,
+
+    //     placedAt: o.placedAt ?? null,
+    //     createdAt: o.createdAt ?? null,
+    //     updatedAt: o.updatedAt ?? null,
+    //     readyAt: o.readyAt ?? null,
+    //     servedAt: o.servedAt ?? null,
+    //   };
+
+    //   if (bucket === "active") active.push(mapped);
+    //   else if (bucket === "completed") completed.push(mapped);
+    //   else cancelled.push(mapped);
+    // }
 
     return res.status(200).json({
       shift: {
