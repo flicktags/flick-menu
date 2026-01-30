@@ -12,7 +12,7 @@ const customMenuTypeSchema = new mongoose.Schema(
     createdAt: { type: Date, default: Date.now },
     updatedAt: { type: Date, default: Date.now },
   },
-  { _id: false }
+  { _id: false },
 );
 
 const menuSectionSchema = new mongoose.Schema(
@@ -24,14 +24,14 @@ const menuSectionSchema = new mongoose.Schema(
     isEnabled: { type: Boolean, default: true },
     itemCount: { type: Number, default: 0 },
   },
-  { _id: false }
+  { _id: false },
 );
 
 const customizationSchema = new mongoose.Schema(
   {
     isClassicMenu: { type: Boolean, default: false },
   },
-  { _id: false }
+  { _id: false },
 );
 
 // ✅ NEW: Stations (future-proof beyond KDS)
@@ -53,7 +53,7 @@ const stationSchema = new mongoose.Schema(
     createdAt: { type: Date, default: Date.now },
     updatedAt: { type: Date, default: Date.now },
   },
-  { _id: false }
+  { _id: false },
 );
 
 const branchSchema = new mongoose.Schema(
@@ -66,8 +66,12 @@ const branchSchema = new mongoose.Schema(
     nameEnglish: { type: String, required: true },
     nameArabic: { type: String },
     venueType: { type: String },
+    // ✅ NEW: station-based KDS behavior toggle (default false)
+    stationBased: { type: Boolean, default: false },
 
-    serviceFeatures: [{ type: String, enum: ["dine_in", "takeaway", "delivery"] }],
+    serviceFeatures: [
+      { type: String, enum: ["dine_in", "takeaway", "delivery"] },
+    ],
 
     openingHours: {
       Mon: String,
@@ -160,14 +164,13 @@ const branchSchema = new mongoose.Schema(
       ],
     },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 // Helpful index if you search stations often (optional)
 branchSchema.index({ branchId: 1 });
 
 export default mongoose.model("Branch", branchSchema);
-
 
 // // models/Branch.js
 // import mongoose from "mongoose";

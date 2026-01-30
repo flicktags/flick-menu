@@ -1,6 +1,3 @@
-// import admin from "../config/firebase.js";
-// import Branch from "../models/Branch.js";
-// import Vendor from "../models/Vendor.js";
 // controllers/branchController.js
 import admin from "../config/firebase.js";
 import Branch from "../models/Branch.js";
@@ -56,6 +53,15 @@ const toBool = (v) => {
   return false;
 };
 
+// ✅ Always return boolean even if missing in older DB docs
+const withStationBased = (branchObj) => {
+  if (!branchObj) return branchObj;
+  return {
+    ...branchObj,
+    stationBased: !!branchObj.stationBased,
+  };
+};
+
 // -------------------- REGISTER BRANCH --------------------
 
 export const registerBranch = async (req, res) => {
@@ -79,8 +85,11 @@ export const registerBranch = async (req, res) => {
       // optional from FE (plan only). expiryDate is controlled by backend
       subscription,
 
-      // ✅ NEW: customization may come later, but for now backend forces default
+      // customization (backend forces default below)
       customization,
+
+      // ✅ NEW
+      stationBased,
     } = req.body;
 
     if (!token) {
@@ -132,12 +141,15 @@ export const registerBranch = async (req, res) => {
           ? !!vendor.taxes.isVatInclusive
           : true;
 
-    // ✅ NEW: Force customization defaults on register
-    // (Even if FE sends something, you asked to default false for now)
+    // ✅ Force customization defaults on register
     const customizationObj = {
       isClassicMenu: false,
       // later you can add more keys here
     };
+
+    // ✅ NEW: stationBased defaults to false if FE doesn't send it
+    const stationBasedBool =
+      stationBased !== undefined ? toBool(stationBased) : false;
 
     // create branch
     const branch = await Branch.create({
@@ -148,6 +160,9 @@ export const registerBranch = async (req, res) => {
       nameEnglish,
       nameArabic,
       venueType,
+
+      // ✅ NEW
+      stationBased: stationBasedBool,
 
       // serviceFeatures: if FE sends, allow only whitelisted keys
       serviceFeatures: Array.isArray(serviceFeatures)
@@ -174,16 +189,17 @@ export const registerBranch = async (req, res) => {
 
       subscription: { plan, expiryDate },
 
-      // ✅ NEW
       customization: customizationObj,
 
       createdAt,
       updatedAt: createdAt,
     });
 
-    return res
-      .status(201)
-      .json({ message: "Branch registered successfully", branch });
+    // ✅ Return with guaranteed boolean stationBased
+    return res.status(201).json({
+      message: "Branch registered successfully",
+      branch: withStationBased(branch.toObject ? branch.toObject() : branch),
+    });
   } catch (error) {
     console.error("Branch Register Error:", error);
     return res.status(500).json({ message: error.message });
@@ -260,7 +276,7 @@ export const listBranchesByVendor = async (req, res) => {
       ];
     }
 
-    const [items, total] = await Promise.all([
+    const [itemsRaw, total] = await Promise.all([
       Branch.find(filter)
         .sort({ createdAt: -1 })
         .skip(skip)
@@ -268,6 +284,9 @@ export const listBranchesByVendor = async (req, res) => {
         .lean(),
       Branch.countDocuments(filter),
     ]);
+
+    // ✅ Guarantee stationBased exists and is boolean (backward compatible)
+    const items = (Array.isArray(itemsRaw) ? itemsRaw : []).map(withStationBased);
 
     return res.json({
       vendorId: resolvedVendorId,
@@ -310,6 +329,12 @@ export const updateBranchInformation = async (req, res) => {
     if (b.nameArabic !== undefined) branch.nameArabic = String(b.nameArabic);
     if (b.venueType !== undefined) branch.venueType = String(b.venueType);
     if (b.status !== undefined) branch.status = String(b.status);
+
+    // ✅ NEW: StationBased toggle
+    // MUST allow false, so check undefined only
+    if (b.stationBased !== undefined) {
+      branch.stationBased = toBool(b.stationBased);
+    }
 
     // Service features
     if (Array.isArray(b.serviceFeatures)) {
@@ -450,7 +475,8 @@ export const updateBranchInformation = async (req, res) => {
     // bump menu stamp so customer cached view knows something changed
     await touchBranchMenuStampByBizId(branch.branchId);
 
-    const updated = await Branch.findById(branch._id).lean();
+    const updatedRaw = await Branch.findById(branch._id).lean();
+    const updated = withStationBased(updatedRaw);
 
     return res.json({ message: "Branch updated", branch: updated });
   } catch (err) {
@@ -616,7 +642,7 @@ export const getBranchCustomization = async (req, res) => {
 
     return res.json({
       message: "Customization fetched",
-      buildTag: "customization-route-v1", // ✅ helps you confirm deployment
+      buildTag: "customization-route-v1",
       branchId: branch.branchId,
       customization,
     });
@@ -667,8 +693,6 @@ export const patchBranchCustomization = async (req, res) => {
     // ✅ Apply even if value is false
     if (hasOwn(c, "isClassicMenu")) {
       const next = toBool(c.isClassicMenu);
-
-      // ALWAYS set when key exists (even if same) — avoids “false ignored” confusion
       branch.set("customization.isClassicMenu", next);
     } else {
       return res.status(400).json({
@@ -703,10 +727,28 @@ export const patchBranchCustomization = async (req, res) => {
 };
 
 
+// // import admin from "../config/firebase.js";
+// // import Branch from "../models/Branch.js";
+// // import Vendor from "../models/Vendor.js";
+// // controllers/branchController.js
+// import admin from "../config/firebase.js";
+// import Branch from "../models/Branch.js";
+// import Vendor from "../models/Vendor.js";
 // import MenuType from "../models/MenuType.js";
 // import { generateBranchId } from "../utils/generateBranchId.js";
 // import { generatePublicSlug } from "../utils/generatePublicSlug.js";
 // import { touchBranchMenuStampByBizId } from "../utils/touchMenuStamp.js";
+
+// // NOTE: Make sure you have this somewhere in your project.
+// // If you already have it in the old file, keep the same values.
+// const _SERVICE = new Set([
+//   "dineIn",
+//   "takeAway",
+//   "delivery",
+//   "pickup",
+//   "carHop",
+//   "roomService",
+// ]);
 
 // async function generateUniquePublicSlug(maxTries = 12) {
 //   for (let i = 0; i < maxTries; i++) {
@@ -716,6 +758,34 @@ export const patchBranchCustomization = async (req, res) => {
 //   }
 //   throw new Error("Failed to generate unique publicSlug");
 // }
+
+// // -------------------- INTERNAL HELPERS --------------------
+
+// const loadBranchByPublicId = async (branchId) => {
+//   const branch = await Branch.findOne({ branchId }).lean(false); // real doc for save()
+//   return branch;
+// };
+
+// const ensureCanManageBranch = async (req, branch) => {
+//   const uid = req.user?.uid;
+//   if (!uid || !branch) return false;
+
+//   if (branch.userId === uid) return true;
+
+//   const vendor = await Vendor.findOne({ vendorId: branch.vendorId }).lean();
+//   if (vendor && vendor.userId === uid) return true;
+
+//   return false;
+// };
+
+// const toBool = (v) => {
+//   if (v === true || v === false) return v;
+//   if (typeof v === "string") return v.toLowerCase() === "true";
+//   if (typeof v === "number") return v === 1;
+//   return false;
+// };
+
+// // -------------------- REGISTER BRANCH --------------------
 
 // export const registerBranch = async (req, res) => {
 //   try {
@@ -737,6 +807,9 @@ export const patchBranchCustomization = async (req, res) => {
 
 //       // optional from FE (plan only). expiryDate is controlled by backend
 //       subscription,
+
+//       // ✅ NEW: customization may come later, but for now backend forces default
+//       customization,
 //     } = req.body;
 
 //     if (!token) {
@@ -757,10 +830,10 @@ export const patchBranchCustomization = async (req, res) => {
 //     const branchId = await generateBranchId();
 //     const publicSlug = await generateUniquePublicSlug();
 
-//     // ✅ backend-controlled "createdAt"
+//     // backend-controlled createdAt
 //     const createdAt = new Date();
 
-//     // ✅ 30 days trial
+//     // 30 days trial
 //     const trialDays = 30;
 //     const expiryDate = new Date(
 //       createdAt.getTime() + trialDays * 24 * 60 * 60 * 1000,
@@ -776,7 +849,6 @@ export const patchBranchCustomization = async (req, res) => {
 //     const vatPct = taxes?.vatPercentage ?? vendor?.taxes?.vatPercentage ?? 0;
 //     const svcPct = taxes?.serviceChargePercentage ?? 0;
 
-//     // ✅ take vatNumber from request first, otherwise fallback to vendor.billing.vatNumber
 //     const vatNumber =
 //       (taxes?.vatNumber && String(taxes.vatNumber).trim()) ||
 //       (vendor?.billing?.vatNumber && String(vendor.billing.vatNumber).trim()) ||
@@ -789,6 +861,13 @@ export const patchBranchCustomization = async (req, res) => {
 //           ? !!vendor.taxes.isVatInclusive
 //           : true;
 
+//     // ✅ NEW: Force customization defaults on register
+//     // (Even if FE sends something, you asked to default false for now)
+//     const customizationObj = {
+//       isClassicMenu: false,
+//       // later you can add more keys here
+//     };
+
 //     // create branch
 //     const branch = await Branch.create({
 //       branchId,
@@ -798,7 +877,12 @@ export const patchBranchCustomization = async (req, res) => {
 //       nameEnglish,
 //       nameArabic,
 //       venueType,
-//       serviceFeatures,
+
+//       // serviceFeatures: if FE sends, allow only whitelisted keys
+//       serviceFeatures: Array.isArray(serviceFeatures)
+//         ? serviceFeatures.filter((x) => _SERVICE.has(String(x)))
+//         : undefined,
+
 //       openingHours,
 //       contact,
 //       address,
@@ -808,20 +892,20 @@ export const patchBranchCustomization = async (req, res) => {
 //       taxes: {
 //         vatPercentage: Number(vatPct) || 0,
 //         serviceChargePercentage: Number(svcPct) || 0,
-//         vatNumber, // ✅ NEW
-//         isVatInclusive, // ✅ NEW
+//         vatNumber,
+//         isVatInclusive,
 
-//         platformFeePerOrder: null, // ✅ NEW
-//         showPlatformFee: true, // ✅ NEW (or false if you prefer)
-//         platformFeePaidByCustomer: true, // ✅ NEW
+//         platformFeePerOrder: null,
+//         showPlatformFee: true,
+//         platformFeePaidByCustomer: true,
 //       },
 //       qrSettings,
 
-//       // ✅ only plan + expiryDate
 //       subscription: { plan, expiryDate },
 
-//       // ✅ force timestamps at creation to match your required format
-//       // (Mongoose would do this anyway, but this guarantees exact createdAt/updatedAt)
+//       // ✅ NEW
+//       customization: customizationObj,
+
 //       createdAt,
 //       updatedAt: createdAt,
 //     });
@@ -835,7 +919,8 @@ export const patchBranchCustomization = async (req, res) => {
 //   }
 // };
 
-// // controllers/branchController.js
+// // -------------------- LIST BRANCHES --------------------
+
 // export const listBranchesByVendor = async (req, res) => {
 //   try {
 //     const uid = req.user?.uid; // from verifyFirebaseToken
@@ -843,7 +928,7 @@ export const patchBranchCustomization = async (req, res) => {
 
 //     // Accept vendorId from /vendor/:vendorId or ?vendorId=
 //     let vendorId = req.params.vendorId || req.query.vendorId;
-//     // NEW: accept branchId as an exact match filter
+//     // accept branchId as an exact match filter
 //     const branchId = (req.query.branchId || "").toString().trim();
 
 //     // Pagination
@@ -889,14 +974,9 @@ export const patchBranchCustomization = async (req, res) => {
 //       }
 //     }
 
-//     // Compose final filter
 //     const filter = { ...baseFilter };
 
-//     // NEW: branchId exact match (if provided)
-//     if (branchId) {
-//       filter.branchId = branchId;
-//     }
-
+//     if (branchId) filter.branchId = branchId;
 //     if (status) filter.status = status;
 
 //     if (q) {
@@ -932,26 +1012,7 @@ export const patchBranchCustomization = async (req, res) => {
 //   }
 // };
 
-// const loadBranchByPublicId = async (branchId) => {
-//   const branch = await Branch.findOne({ branchId }).lean(false); // lean(false) => real doc for save()
-//   return branch;
-// };
-
-// const ensureCanManageBranch = async (req, branch) => {
-//   // Allow branch owner or vendor owner
-//   const uid = req.user?.uid;
-//   if (!uid || !branch) return false;
-
-//   if (branch.userId === uid) return true;
-
-//   const vendor = await Vendor.findOne({ vendorId: branch.vendorId }).lean();
-//   if (vendor && vendor.userId === uid) return true;
-
-//   // (Optional) allow admin claim:
-//   // if (req.user?.admin === true) return true;
-
-//   return false;
-// };
+// // -------------------- UPDATE BRANCH --------------------
 
 // export const updateBranchInformation = async (req, res) => {
 //   try {
@@ -971,7 +1032,6 @@ export const patchBranchCustomization = async (req, res) => {
 
 //     const b = req.body || {};
 
-//     // ✅ FIX: define days allowed in openingHours (matches Branch schema keys)
 //     const _DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
 //     // Basics
@@ -980,14 +1040,14 @@ export const patchBranchCustomization = async (req, res) => {
 //     if (b.venueType !== undefined) branch.venueType = String(b.venueType);
 //     if (b.status !== undefined) branch.status = String(b.status);
 
-//     // Service features (replace if provided)
+//     // Service features
 //     if (Array.isArray(b.serviceFeatures)) {
 //       branch.serviceFeatures = b.serviceFeatures.filter((x) =>
 //         _SERVICE.has(String(x)),
 //       );
 //     }
 
-//     // Opening hours: merge days only provided
+//     // Opening hours
 //     if (b.openingHours && typeof b.openingHours === "object") {
 //       branch.openingHours = branch.openingHours || {};
 //       for (const [dayRaw, val] of Object.entries(b.openingHours)) {
@@ -1017,7 +1077,7 @@ export const patchBranchCustomization = async (req, res) => {
 //         branch.contact.phone = String(b.contact.phone);
 //     }
 
-//     // Address (+coordinates)
+//     // Address
 //     if (b.address && typeof b.address === "object") {
 //       branch.address = branch.address || {};
 //       const a = b.address;
@@ -1062,74 +1122,36 @@ export const patchBranchCustomization = async (req, res) => {
 //       }
 //     }
 
-//     // Taxes
-//     // Taxes
-// if (b.taxes && typeof b.taxes === "object") {
-//   branch.taxes = branch.taxes || {};
+//     // Taxes (safe parsing)
+//     if (b.taxes && typeof b.taxes === "object") {
+//       branch.taxes = branch.taxes || {};
 
-//   // Helpers (prevents "false" string => true)
-//   const toBool = (v) => {
-//     if (v === true || v === false) return v;
-//     if (typeof v === "string") return v.toLowerCase() === "true";
-//     if (typeof v === "number") return v === 1;
-//     return false;
-//   };
+//       if (b.taxes.vatPercentage !== undefined) {
+//         const n = Number(b.taxes.vatPercentage);
+//         branch.taxes.vatPercentage = Number.isFinite(n) ? n : 0;
+//       }
 
-//   // VAT %
-//   if (b.taxes.vatPercentage !== undefined) {
-//     const n = Number(b.taxes.vatPercentage);
-//     branch.taxes.vatPercentage = Number.isFinite(n) ? n : 0;
-//   }
+//       if (b.taxes.serviceChargePercentage !== undefined) {
+//         const n = Number(b.taxes.serviceChargePercentage);
+//         branch.taxes.serviceChargePercentage = Number.isFinite(n) ? n : 0;
+//       }
 
-//   // Service %
-//   if (b.taxes.serviceChargePercentage !== undefined) {
-//     const n = Number(b.taxes.serviceChargePercentage);
-//     branch.taxes.serviceChargePercentage = Number.isFinite(n) ? n : 0;
-//   }
+//       if (b.taxes.isVatInclusive !== undefined) {
+//         branch.taxes.isVatInclusive = toBool(b.taxes.isVatInclusive);
+//       }
 
-//   // Inclusive VAT
-//   if (b.taxes.isVatInclusive !== undefined) {
-//     branch.taxes.isVatInclusive = toBool(b.taxes.isVatInclusive);
-//   }
+//       if (b.taxes.showPlatformFee !== undefined) {
+//         branch.taxes.showPlatformFee = toBool(b.taxes.showPlatformFee);
+//       }
 
-//   // ✅ Show/Hide platform fee line item (independent)
-//   if (b.taxes.showPlatformFee !== undefined) {
-//     branch.taxes.showPlatformFee = toBool(b.taxes.showPlatformFee);
-//   }
+//       if (b.taxes.platformFeePaidByCustomer !== undefined) {
+//         branch.taxes.platformFeePaidByCustomer = toBool(
+//           b.taxes.platformFeePaidByCustomer,
+//         );
+//       }
 
-//   // ✅ Who pays platform fee (independent)
-//   if (b.taxes.platformFeePaidByCustomer !== undefined) {
-//     branch.taxes.platformFeePaidByCustomer = toBool(
-//       b.taxes.platformFeePaidByCustomer
-//     );
-//   }
-
-//   // ❌ Do NOT allow vendor to change platformFeePerOrder
-//   // if (b.taxes.platformFeePerOrder !== undefined) { ... }
-// }
-
-//     // if (b.taxes && typeof b.taxes === "object") {
-//     //   branch.taxes = branch.taxes || {};
-//     //   if (b.taxes.vatPercentage !== undefined)
-//     //     branch.taxes.vatPercentage = Number(b.taxes.vatPercentage);
-//     //   if (b.taxes.serviceChargePercentage !== undefined) {
-//     //     branch.taxes.serviceChargePercentage = Number(
-//     //       b.taxes.serviceChargePercentage,
-//     //     );
-//     //   }
-//     //   if (b.taxes.isVatInclusive !== undefined) {
-//     //     branch.taxes.isVatInclusive = !!b.taxes.isVatInclusive;
-//     //   }
-//     //   if (b.taxes.vatPercentage !== undefined) {
-//     //     const n = Number(b.taxes.vatPercentage);
-//     //     branch.taxes.vatPercentage = Number.isFinite(n) ? n : 0;
-//     //   }
-
-//     //   if (b.taxes.serviceChargePercentage !== undefined) {
-//     //     const n = Number(b.taxes.serviceChargePercentage);
-//     //     branch.taxes.serviceChargePercentage = Number.isFinite(n) ? n : 0;
-//     //   }
-//     // }
+//       // IMPORTANT: do not allow vendor to change platformFeePerOrder here
+//     }
 
 //     // QR Settings
 //     if (b.qrSettings && typeof b.qrSettings === "object") {
@@ -1152,13 +1174,11 @@ export const patchBranchCustomization = async (req, res) => {
 //       }
 //     }
 
-//     // ✅ Save branch
 //     await branch.save();
 
-//     // ✅ IMPORTANT: bump menu stamp so customer cached view knows something changed
+//     // bump menu stamp so customer cached view knows something changed
 //     await touchBranchMenuStampByBizId(branch.branchId);
 
-//     // Re-fetch updated (includes new menuVersion/menuUpdatedAt)
 //     const updated = await Branch.findById(branch._id).lean();
 
 //     return res.json({ message: "Branch updated", branch: updated });
@@ -1168,7 +1188,9 @@ export const patchBranchCustomization = async (req, res) => {
 //   }
 // };
 
-// // ---------- GET /api/branches/:branchId/menu/sections ----------
+// // -------------------- BRANCH MENU SECTIONS --------------------
+
+// // GET /api/branches/:branchId/menu/sections
 // export const getBranchMenuSections = async (req, res) => {
 //   try {
 //     const { branchId } = req.params;
@@ -1197,7 +1219,7 @@ export const patchBranchCustomization = async (req, res) => {
 //   }
 // };
 
-// // ---------- POST /api/branches/:branchId/menu/sections ----------
+// // POST /api/branches/:branchId/menu/sections
 // export const upsertBranchMenuSection = async (req, res) => {
 //   try {
 //     const { branchId } = req.params;
@@ -1233,13 +1255,11 @@ export const patchBranchCustomization = async (req, res) => {
 
 //     let created = false;
 //     if (i >= 0) {
-//       // update existing
 //       list[i].isEnabled = true;
 //       if (nameEnglish !== undefined) list[i].nameEnglish = nameEnglish;
 //       if (nameArabic !== undefined) list[i].nameArabic = nameArabic;
 //       if (sortOrder !== undefined) list[i].sortOrder = Number(sortOrder) || 0;
 //     } else {
-//       // push new
 //       list.push({
 //         key,
 //         nameEnglish,
@@ -1266,7 +1286,7 @@ export const patchBranchCustomization = async (req, res) => {
 //   }
 // };
 
-// // ---------- DELETE /api/branches/:branchId/menu/sections/:key?hard=true ----------
+// // DELETE /api/branches/:branchId/menu/sections/:key?hard=true
 // export const disableOrRemoveBranchMenuSection = async (req, res) => {
 //   try {
 //     const { branchId, key: rawKey } = req.params;
@@ -1301,5 +1321,112 @@ export const patchBranchCustomization = async (req, res) => {
 //   } catch (e) {
 //     console.error("disableOrRemoveBranchMenuSection error:", e);
 //     return res.status(500).json({ message: e.message });
+//   }
+// };
+
+// export const getBranchCustomization = async (req, res) => {
+//   try {
+//     const uid = req.user?.uid;
+//     if (!uid) return res.status(401).json({ message: "Unauthorized" });
+
+//     const { branchId } = req.params;
+//     if (!branchId)
+//       return res.status(400).json({ message: "branchId is required" });
+
+//     const branch = await loadBranchByPublicId(branchId);
+//     if (!branch) return res.status(404).json({ message: "Branch not found" });
+
+//     if (!(await ensureCanManageBranch(req, branch))) {
+//       return res.status(403).json({ message: "Forbidden" });
+//     }
+
+//     // Ensure defaults if missing in older records
+//     const customization = branch.customization || { isClassicMenu: false };
+
+//     return res.json({
+//       message: "Customization fetched",
+//       buildTag: "customization-route-v1", // ✅ helps you confirm deployment
+//       branchId: branch.branchId,
+//       customization,
+//     });
+//   } catch (err) {
+//     console.error("getBranchCustomization error:", err);
+//     return res.status(500).json({ message: err.message });
+//   }
+// };
+
+// export const patchBranchCustomization = async (req, res) => {
+//   try {
+//     const uid = req.user?.uid;
+//     if (!uid) return res.status(401).json({ message: "Unauthorized" });
+
+//     const { branchId } = req.params;
+//     if (!branchId) {
+//       return res.status(400).json({ message: "branchId is required" });
+//     }
+
+//     const branch = await loadBranchByPublicId(branchId);
+//     if (!branch) return res.status(404).json({ message: "Branch not found" });
+
+//     if (!(await ensureCanManageBranch(req, branch))) {
+//       return res.status(403).json({ message: "Forbidden" });
+//     }
+
+//     const body = req.body || {};
+//     const c =
+//       body.customization && typeof body.customization === "object"
+//         ? body.customization
+//         : null;
+
+//     if (!c) {
+//       return res
+//         .status(400)
+//         .json({ message: "customization object is required" });
+//     }
+
+//     // ✅ MUST use hasOwnProperty so "false" is not ignored
+//     const hasOwn = (obj, key) =>
+//       Object.prototype.hasOwnProperty.call(obj, key);
+
+//     const before = branch.customization?.isClassicMenu ?? false;
+
+//     // Ensure customization object exists
+//     if (!branch.customization) branch.customization = {};
+
+//     // ✅ Apply even if value is false
+//     if (hasOwn(c, "isClassicMenu")) {
+//       const next = toBool(c.isClassicMenu);
+
+//       // ALWAYS set when key exists (even if same) — avoids “false ignored” confusion
+//       branch.set("customization.isClassicMenu", next);
+//     } else {
+//       return res.status(400).json({
+//         message: "customization.isClassicMenu is required",
+//         buildTag: "customization-route-v2",
+//       });
+//     }
+
+//     // Force mongoose to treat it as modified
+//     branch.markModified("customization");
+
+//     await branch.save();
+//     await touchBranchMenuStampByBizId(branch.branchId);
+
+//     // Read fresh (by branchId) so you *see exactly what DB has*
+//     const fresh = await Branch.findOne({ branchId: branch.branchId }).lean();
+
+//     const after = fresh?.customization?.isClassicMenu ?? false;
+
+//     return res.json({
+//       message: "Customization updated",
+//       buildTag: "customization-route-v2",
+//       branchId: branch.branchId,
+//       before,
+//       after,
+//       customization: fresh?.customization ?? { isClassicMenu: false },
+//     });
+//   } catch (err) {
+//     console.error("patchBranchCustomization error:", err);
+//     return res.status(500).json({ message: err.message });
 //   }
 // };
