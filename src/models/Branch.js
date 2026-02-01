@@ -30,6 +30,7 @@ const menuSectionSchema = new mongoose.Schema(
 const customizationSchema = new mongoose.Schema(
   {
     isClassicMenu: { type: Boolean, default: false },
+    isClassicMenuwithFullImage: { type: Boolean, default: false },
   },
   { _id: false },
 );

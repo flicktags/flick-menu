@@ -75,6 +75,8 @@ function buildPublicBranchInfo(branch) {
 
     customization: {
       isClassicMenu: branch?.customization?.isClassicMenu === true,
+      isClassicMenuwithFullImage:
+        branch?.customization?.isClassicMenuwithFullImage === true, // ✅ NEW
     },
   };
 }
@@ -268,6 +270,8 @@ export const getPublicMenuTypes = async (req, res) => {
         branch: {
           customization: {
             isClassicMenu: branch?.customization?.isClassicMenu === true,
+            isClassicMenuwithFullImage:
+              branch?.customization?.isClassicMenuwithFullImage === true, // ✅ NEW
           },
         },
       };
@@ -328,6 +332,8 @@ export const getPublicMenuTypes = async (req, res) => {
 
         customization: {
           isClassicMenu: branch?.customization?.isClassicMenu === true,
+          isClassicMenuwithFullImage:
+            branch?.customization?.isClassicMenuwithFullImage === true, // ✅ NEW
         },
       },
       sections,

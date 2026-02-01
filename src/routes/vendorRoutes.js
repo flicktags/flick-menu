@@ -1,3 +1,4 @@
+//src/routes/vendorRoutes
 import express from "express";
 import { registerVendor } from "../controllers/authController.js";
 import { updateMyVendor } from "../controllers/vendorController.js";
