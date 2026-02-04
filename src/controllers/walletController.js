@@ -64,11 +64,14 @@ export async function getLedger(req, res) {
 // body: { branchId, amountFils OR amountBhd, bonusPercent?, idempotencyKey? }
 export async function manualTopup(req, res) {
   const session = await mongoose.startSession();
+
   try {
     const actorUserId = req.user?.uid || "";
 
     const branchId = String(req.body.branchId || "").trim();
-    if (!branchId) return res.status(400).json({ ok: false, message: "branchId required" });
+    if (!branchId) {
+      return res.status(400).json({ ok: false, message: "branchId required" });
+    }
 
     // amount input
     const amountFilsBody = req.body.amountFils;
@@ -84,39 +87,59 @@ export async function manualTopup(req, res) {
     }
 
     if (amountFils <= 0) {
-      return res.status(400).json({ ok: false, message: "amountFils/amountBhd must be > 0" });
+      return res
+        .status(400)
+        .json({ ok: false, message: "amountFils/amountBhd must be > 0" });
     }
 
-    const bonusPercent = Math.min(100, Math.max(0, Number(req.body.bonusPercent ?? 15)));
+    const bonusPercent = Math.min(
+      100,
+      Math.max(0, Number(req.body.bonusPercent ?? 15))
+    );
+
     const idemKey = String(req.body.idempotencyKey || "").trim(); // optional
 
+    // We'll store the result here and respond AFTER the transaction commits
+    let result = null;
+
     await session.withTransaction(async () => {
-      // Idempotency check (prevents double topup)
+      // -------------------- Idempotency check --------------------
       if (idemKey) {
-        const exists = await BillingLedger.findOne({ idempotencyKey: idemKey }).session(session);
+        const exists = await BillingLedger.findOne({ idempotencyKey: idemKey })
+          .session(session);
+
         if (exists) {
-          // return existing result (safe)
-          res.status(200).json({ ok: true, reused: true, ledger: exists });
+          // ✅ Do NOT res.json() here (inside txn). Just store result and return.
+          result = {
+            reused: true,
+            ledger: exists,
+            wallet: null,
+            vendorId: exists.vendorId,
+            branchId: exists.branchId,
+          };
           return;
         }
       }
 
-      // Read fee from branch
+      // -------------------- Read fee from branch --------------------
       const { feeFils, vendorId } = await readBranchUnitFeeFils(branchId, session);
 
       if (feeFils <= 0) {
-        // You can allow topup even if fee isn't configured, but it would create 0 orders.
-        // Better: block so vendor doesn't pay without value.
         throw new Error("PLATFORM_FEE_NOT_SET");
       }
 
-      const { paidOrders, bonusOrders } = computeTopupOrders(amountFils, feeFils, bonusPercent);
+      const { paidOrders, bonusOrders } = computeTopupOrders(
+        amountFils,
+        feeFils,
+        bonusPercent
+      );
 
       if (paidOrders <= 0) {
         throw new Error("TOPUP_TOO_SMALL_FOR_FEE");
       }
 
-      // Upsert wallet account
+      // -------------------- Upsert wallet account --------------------
+      // ✅ FIX: vendorId MUST NOT be in $set AND $setOnInsert together
       const wallet = await BranchWalletAccount.findOneAndUpdate(
         { branchId },
         {
@@ -129,8 +152,11 @@ export async function manualTopup(req, res) {
             graceDaysAfterExhausted: 2,
           },
           $set: {
-            vendorId,
+            // vendorId: vendorId,  // ❌ REMOVED to avoid conflict
             updatedByUserId: actorUserId,
+
+            // OPTIONAL: if you want bonusPercent to update every time:
+            // bonusPercent,
           },
           $inc: {
             paidOrdersRemaining: paidOrders,
@@ -147,8 +173,9 @@ export async function manualTopup(req, res) {
       wallet.graceUntil = null;
       await wallet.save({ session });
 
-      // Ledger entry
+      // -------------------- Ledger entry --------------------
       const ledgerId = await generateLedgerId();
+
       const led = await BillingLedger.create(
         [
           {
@@ -156,16 +183,21 @@ export async function manualTopup(req, res) {
             branchId,
             vendorId,
             actorUserId,
-            actorRole: "vendor", // or "admin" depending UI role later
+            actorRole: "vendor", // or "admin" later
+
             entryType: "TOPUP",
             direction: "CREDIT",
+
             amountFils,
             currency: "BHD",
+
             unitFeeFils: feeFils,
             ordersPurchased: paidOrders,
             bonusOrdersGranted: bonusOrders,
+
             status: "succeeded",
             idempotencyKey: idemKey || "",
+
             payment: {
               provider: "",
               status: "",
@@ -176,11 +208,13 @@ export async function manualTopup(req, res) {
               paidAt: null,
               raw: null,
             },
+
             snapshotAfter: {
               paidOrdersRemaining: wallet.paidOrdersRemaining,
               bonusOrdersRemaining: wallet.bonusOrdersRemaining,
               totalOrdersRemaining: wallet.totalOrdersRemaining,
             },
+
             title: "Manual wallet top-up (sample)",
             note: `Topup amount=${amountFils} fils, fee=${feeFils} fils/order, bonus=${bonusPercent}%`,
             meta: { bonusPercent },
@@ -189,19 +223,56 @@ export async function manualTopup(req, res) {
         { session }
       );
 
-      res.status(201).json({ ok: true, wallet, ledger: led[0] });
+      result = {
+        reused: false,
+        wallet,
+        ledger: led[0],
+      };
     });
 
-    // If transaction returned reused response, it already responded.
+    // -------------------- Respond AFTER txn --------------------
+    if (!result) {
+      // This should never happen, but safe guard
+      return res.status(500).json({ ok: false, message: "UNKNOWN_ERROR" });
+    }
+
+    if (result.reused) {
+      return res.status(200).json({
+        ok: true,
+        reused: true,
+        wallet: result.wallet,
+        ledger: result.ledger,
+      });
+    }
+
+    return res.status(201).json({
+      ok: true,
+      wallet: result.wallet,
+      ledger: result.ledger,
+    });
   } catch (e) {
     const msg = String(e?.message || e);
+
+    // If you want to treat some messages as server errors:
+    // return res.status(500) for unexpected.
+    const known400 = new Set([
+      "branchId required",
+      "amountFils/amountBhd must be > 0",
+      "PLATFORM_FEE_NOT_SET",
+      "TOPUP_TOO_SMALL_FOR_FEE",
+      "BRANCH_NOT_FOUND",
+    ]);
+
+    const statusCode = known400.has(msg) ? 400 : 500;
+
     if (!res.headersSent) {
-      return res.status(400).json({ ok: false, message: msg });
+      return res.status(statusCode).json({ ok: false, message: msg });
     }
   } finally {
     session.endSession();
   }
 }
+
 
 // ✅ UPDATE SETTINGS (notify threshold, consume priority)
 // POST /api/admin/wallet/settings
