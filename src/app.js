@@ -19,6 +19,8 @@ import kdsRoutes from "./routes/kdsRoutes.js";
 import vendorStationRoutes from "./routes/vendorStationRoutes.js";
 // New redirect import
 import { publicBranchRedirect } from "./routes/publicRedirect.js";
+import walletRoutes from "./routes/walletRoutes.js";
+
 
 const app = express();
 
@@ -42,6 +44,8 @@ app.use("/api/onboarding", onboardingRoutes);
 app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/kds", kdsRoutes);
 app.use("/api", vendorStationRoutes);
+app.use("/api/wallet", walletRoutes);
+
 
 // --- Public branch redirect route ---
 // IMPORTANT: This must be BEFORE the Flutter static serving
