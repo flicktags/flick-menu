@@ -6,6 +6,9 @@ import Order from "../models/Order.js";
 import Qr from "../models/QrCodeOrders.js"; // ✅ or whatever your QR model file is called
 import HelpRequest from "../models/HelpRequest.js";
 import bcrypt from "bcryptjs";
+import BranchWalletAccount from "../models/BranchWalletAccount.js";
+import BillingLedger from "../models/BillingLedger.js";
+import { generateLedgerId, readBranchUnitFeeFils } from "../utils/billingWallet.js";
 
 const DAY_KEYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
@@ -642,13 +645,14 @@ export const getKdsOverview = async (req, res) => {
  * - stationKey=BAR (station view) -> update ONLY items whose kdsStationKey=BAR
  * - stationKey=ALL or MAIN or missing -> update ALL items (global action)
  */
+
 export const updateKdsOrderStatus = async (req, res) => {
+  const session = await mongoose.startSession();
+
   try {
     const id = String(req.params.id || "").trim();
     const incoming = String(req.body?.status || "").trim();
-    const branchId = String(
-      req.body?.branchId || req.query.branchId || "",
-    ).trim();
+    const branchId = String(req.body?.branchId || req.query.branchId || "").trim();
 
     const stationRaw =
       String(req.body?.stationKey || "").trim() ||
@@ -656,8 +660,7 @@ export const updateKdsOrderStatus = async (req, res) => {
       String(req.query.station || "").trim();
 
     const stationKey = stationRaw ? stationRaw.toUpperCase() : "";
-    const isStationScoped =
-      stationKey && stationKey !== "ALL" && stationKey !== "MAIN";
+    const isStationScoped = stationKey && stationKey !== "ALL" && stationKey !== "MAIN";
 
     if (!mongoose.Types.ObjectId.isValid(id)) {
       return res.status(400).json({ error: "Invalid order id" });
@@ -668,107 +671,420 @@ export const updateKdsOrderStatus = async (req, res) => {
     if (!nextLabel) {
       return res.status(400).json({ error: "Invalid status value" });
     }
-    const nextCode = toCode(nextLabel); // PREPARING/READY/...
-
-    const order = await Order.findById(id);
-    if (!order) return res.status(404).json({ error: "Order not found" });
-
-    if (branchId && String(order.branchId || "") !== branchId) {
-      return res.status(403).json({ error: "Branch mismatch" });
-    }
-
-    // block terminal orders
-    const curOrder = String(order.status || "").toLowerCase();
-    if (["completed", "cancelled", "canceled", "rejected"].includes(curOrder)) {
-      return res
-        .status(409)
-        .json({ error: "Order is terminal; cannot update" });
-    }
+    const nextCode = toCode(nextLabel);
 
     const now = new Date();
     const userId = req.user?.uid || req.user?.email || req.user?.sub || null;
 
-    // ✅ choose which lines this request is allowed to modify
-    const allItems = Array.isArray(order.items) ? order.items : [];
-    const targetItems = isStationScoped
-      ? allItems.filter(
-          (it) => normStationFromItem(it?.kdsStationKey) === stationKey,
-        )
-      : allItems;
+    // ------------------------------
+    // helpers kept inside to avoid touching other code
+    // ------------------------------
+    const asInt = (v, fallback = 0) => {
+      const n = Number(v);
+      if (!Number.isFinite(n)) return fallback;
+      return Math.trunc(n);
+    };
 
-    if (isStationScoped && targetItems.length === 0) {
-      return res.status(409).json({
-        error: "No items for this station in the order",
-        stationKey,
-      });
-    }
+    const nowPlusDays = (days) => {
+      const d = new Date();
+      d.setDate(d.getDate() + asInt(days, 0));
+      return d;
+    };
 
-    // ✅ apply transition per-line (not whole order)
-    let changedCount = 0;
+    // Debit ONE order from wallet with idempotency
+    async function debitWalletOnceOnMainAccept({ branchId, orderId, orderNumber, actorUserId }) {
+      const idemKey = `ORDER_DEBIT:${orderId}`;
 
-    for (const it of targetItems) {
-      // treat missing kdsStatus as PENDING (backward compatible)
-      const curLineCode = normLineStatus(it?.kdsStatus);
-      const curLineLabel = toLabel(curLineCode) || "Pending";
-
-      // allow idempotent, and validate transition per item
-      if (canTransition(curLineLabel, nextLabel)) {
-        const before = normLineStatus(it.kdsStatus);
-        it.kdsStatus = nextCode;
-        it.kdsStatusUpdatedAt = now;
-        it.kdsStatusUpdatedBy = userId;
-
-        if (before !== nextCode) changedCount++;
+      // idempotency check
+      const already = await BillingLedger.findOne({ idempotencyKey: idemKey }).session(session);
+      if (already) {
+        return { reused: true, ledger: already, wallet: null };
       }
+
+      // fee + vendor
+      const { feeFils, vendorId } = await readBranchUnitFeeFils(branchId, session);
+      if (feeFils <= 0) {
+        throw new Error("PLATFORM_FEE_NOT_SET");
+      }
+
+      const wallet = await BranchWalletAccount.findOne({ branchId }).session(session);
+      if (!wallet) throw new Error("WALLET_NOT_FOUND");
+
+      // block if locked and grace expired
+      if (wallet.orderingLocked === true) {
+        if (!wallet.graceUntil || new Date() > new Date(wallet.graceUntil)) {
+          throw new Error("ORDERING_LOCKED");
+        }
+      }
+
+      // exhausted => lock and block
+      if ((wallet.totalOrdersRemaining ?? (wallet.paidOrdersRemaining + wallet.bonusOrdersRemaining)) <= 0) {
+        if (!wallet.exhaustedAt) wallet.exhaustedAt = new Date();
+        wallet.graceUntil = nowPlusDays(wallet.graceDaysAfterExhausted || 2);
+        wallet.orderingLocked = true;
+        wallet.lockedAt = new Date();
+        await wallet.save({ session });
+        throw new Error("WALLET_EXHAUSTED");
+      }
+
+      const priority = wallet.consumePriority || "bonus_first";
+
+      if (priority === "bonus_first") {
+        if (wallet.bonusOrdersRemaining > 0) {
+          wallet.bonusOrdersRemaining -= 1;
+        } else if (wallet.paidOrdersRemaining > 0) {
+          wallet.paidOrdersRemaining -= 1;
+        } else {
+          throw new Error("INSUFFICIENT_ORDERS");
+        }
+      } else {
+        if (wallet.paidOrdersRemaining > 0) {
+          wallet.paidOrdersRemaining -= 1;
+        } else if (wallet.bonusOrdersRemaining > 0) {
+          wallet.bonusOrdersRemaining -= 1;
+        } else {
+          throw new Error("INSUFFICIENT_ORDERS");
+        }
+      }
+
+      // lock if now exhausted
+      const totalAfter = (wallet.totalOrdersRemaining ?? (wallet.paidOrdersRemaining + wallet.bonusOrdersRemaining));
+      if (totalAfter <= 0) {
+        wallet.exhaustedAt = new Date();
+        wallet.graceUntil = nowPlusDays(wallet.graceDaysAfterExhausted || 2);
+        wallet.orderingLocked = true;
+        wallet.lockedAt = new Date();
+      }
+
+      await wallet.save({ session });
+
+      const ledgerId = await generateLedgerId();
+
+      const led = await BillingLedger.create(
+        [
+          {
+            ledgerId,
+            branchId,
+            vendorId,
+            actorUserId: actorUserId || "",
+            actorRole: "system",
+            entryType: "ORDER_DEBIT",
+            direction: "DEBIT",
+            amountFils: feeFils,
+            currency: "BHD",
+            unitFeeFils: feeFils,
+            ordersDebited: 1,
+            orderId,
+            orderNumber: orderNumber || "",
+            status: "succeeded",
+            idempotencyKey: idemKey,
+            payment: {
+              provider: "",
+              status: "",
+              transactionId: "",
+              merchantReference: "",
+              authCode: "",
+              resultCode: "",
+              paidAt: null,
+              raw: null,
+            },
+            snapshotAfter: {
+              paidOrdersRemaining: wallet.paidOrdersRemaining,
+              bonusOrdersRemaining: wallet.bonusOrdersRemaining,
+              totalOrdersRemaining: wallet.totalOrdersRemaining,
+            },
+            title: "Order fee deducted on accept (MAIN)",
+            note: `Deducted 1 order at fee=${feeFils} fils (priority=${priority})`,
+          },
+        ],
+        { session }
+      );
+
+      return { reused: false, wallet, ledger: led[0] };
     }
 
-    if (changedCount === 0) {
-      return res.status(409).json({
-        error:
-          "No line items were updated (transition blocked or already same status)",
-        stationKey: isStationScoped ? stationKey : "ALL",
-        to: nextLabel,
-      });
-    }
+    // ------------------------------
+    // Transaction: update + maybe debit
+    // ------------------------------
+    let responsePayload = null;
 
-    // ✅ derive order.status from line statuses (so customer/admin stays correct)
-    const derivedLabel = deriveOrderStatusFromLines(order.items || []);
-    const derivedCode = toCode(derivedLabel);
+    await session.withTransaction(async () => {
+      const order = await Order.findById(id).session(session);
+      if (!order) {
+        responsePayload = { code: 404, body: { error: "Order not found" } };
+        return;
+      }
 
-    // keep your existing timestamps logic BUT only when derived status reaches those stages
-    order.status = derivedLabel;
+      if (branchId && String(order.branchId || "") !== branchId) {
+        responsePayload = { code: 403, body: { error: "Branch mismatch" } };
+        return;
+      }
 
-    if (derivedCode === "READY") {
-      if (!order.readyAt) order.readyAt = now;
-    }
+      // block terminal orders
+      const curOrder = String(order.status || "").toLowerCase();
+      if (["completed", "cancelled", "canceled", "rejected"].includes(curOrder)) {
+        responsePayload = {
+          code: 409,
+          body: { error: "Order is terminal; cannot update" },
+        };
+        return;
+      }
 
-    if (derivedCode === "SERVED") {
-      if (!order.servedAt) order.servedAt = now;
-    }
+      // ✅ track BEFORE derived status (this is how we detect MAIN accept)
+      const beforeDerivedLabel = deriveOrderStatusFromLines(order.items || []);
+      const beforeDerivedCode = toCode(beforeDerivedLabel);
 
-    // optional: bump revision so KDS devices refresh attention, but NOT required
-    // order.revision = (order.revision || 0) + 1;
+      // ✅ choose which lines this request can modify
+      const allItems = Array.isArray(order.items) ? order.items : [];
+      const targetItems = isStationScoped
+        ? allItems.filter((it) => normStationFromItem(it?.kdsStationKey) === stationKey)
+        : allItems;
 
-    await order.save();
+      if (isStationScoped && targetItems.length === 0) {
+        responsePayload = {
+          code: 409,
+          body: {
+            error: "No items for this station in the order",
+            stationKey,
+          },
+        };
+        return;
+      }
 
-    return res.status(200).json({
-      message: "Line status updated",
-      scope: isStationScoped ? { stationKey } : { stationKey: "ALL" },
-      changedCount,
-      order: {
-        id: String(order._id),
-        status: order.status,
-        readyAt: order.readyAt ?? null,
-        servedAt: order.servedAt ?? null,
-        updatedAt: order.updatedAt ?? null,
-        revision: order.revision ?? 0,
-      },
+      // ✅ apply per-line transition
+      let changedCount = 0;
+
+      for (const it of targetItems) {
+        const curLineCode = normLineStatus(it?.kdsStatus);
+        const curLineLabel = toLabel(curLineCode) || "Pending";
+
+        if (canTransition(curLineLabel, nextLabel)) {
+          const before = normLineStatus(it.kdsStatus);
+          it.kdsStatus = nextCode;
+          it.kdsStatusUpdatedAt = now;
+          it.kdsStatusUpdatedBy = userId;
+
+          if (before !== nextCode) changedCount++;
+        }
+      }
+
+      if (changedCount === 0) {
+        responsePayload = {
+          code: 409,
+          body: {
+            error: "No line items were updated (transition blocked or already same status)",
+            stationKey: isStationScoped ? stationKey : "ALL",
+            to: nextLabel,
+          },
+        };
+        return;
+      }
+
+      // ✅ derive order.status from line statuses
+      const derivedLabel = deriveOrderStatusFromLines(order.items || []);
+      const derivedCode = toCode(derivedLabel);
+
+      order.status = derivedLabel;
+
+      if (derivedCode === "READY") {
+        if (!order.readyAt) order.readyAt = now;
+      }
+      if (derivedCode === "SERVED") {
+        if (!order.servedAt) order.servedAt = now;
+      }
+
+      // ✅ save order first (inside txn)
+      await order.save({ session });
+
+      // ======================================================
+      // ✅ DEBIT ONLY WHEN MAIN ACCEPTS (GLOBAL) THE ORDER
+      // Condition: global action + derived moves PENDING -> PREPARING
+      // ======================================================
+      const isMainGlobalAction = !isStationScoped; // stationKey missing/ALL/MAIN
+      const isAcceptMoment = beforeDerivedCode === "PENDING" && derivedCode === "PREPARING";
+
+      if (isMainGlobalAction && isAcceptMoment) {
+        // debit once for the whole order
+        await debitWalletOnceOnMainAccept({
+          branchId: String(order.branchId || branchId || "").trim(),
+          orderId: String(order._id),
+          orderNumber: String(order.orderNumber || ""),
+          actorUserId: userId,
+        });
+      }
+
+      // keep SAME response shape you had before
+      responsePayload = {
+        code: 200,
+        body: {
+          message: "Line status updated",
+          scope: isStationScoped ? { stationKey } : { stationKey: "ALL" },
+          changedCount,
+          order: {
+            id: String(order._id),
+            status: order.status,
+            readyAt: order.readyAt ?? null,
+            servedAt: order.servedAt ?? null,
+            updatedAt: order.updatedAt ?? null,
+            revision: order.revision ?? 0,
+          },
+        },
+      };
     });
+
+    if (!responsePayload) {
+      return res.status(500).json({ error: "Server error" });
+    }
+
+    return res.status(responsePayload.code).json(responsePayload.body);
   } catch (err) {
-    console.error("updateKdsOrderStatus error:", err);
-    return res.status(500).json({ error: err.message || "Server error" });
+    const msg = String(err?.message || err);
+
+    // Keep it simple & predictable
+    const map = {
+      WALLET_NOT_FOUND: 403,
+      ORDERING_LOCKED: 403,
+      WALLET_EXHAUSTED: 403,
+      PLATFORM_FEE_NOT_SET: 400,
+      INSUFFICIENT_ORDERS: 403,
+      BRANCH_NOT_FOUND: 404,
+    };
+
+    const code = map[msg] || 500;
+    return res.status(code).json({ error: msg || "Server error" });
+  } finally {
+    session.endSession();
   }
 };
+
+
+// export const updateKdsOrderStatus = async (req, res) => {
+//   try {
+//     const id = String(req.params.id || "").trim();
+//     const incoming = String(req.body?.status || "").trim();
+//     const branchId = String(
+//       req.body?.branchId || req.query.branchId || "",
+//     ).trim();
+
+//     const stationRaw =
+//       String(req.body?.stationKey || "").trim() ||
+//       String(req.query.stationKey || "").trim() ||
+//       String(req.query.station || "").trim();
+
+//     const stationKey = stationRaw ? stationRaw.toUpperCase() : "";
+//     const isStationScoped =
+//       stationKey && stationKey !== "ALL" && stationKey !== "MAIN";
+
+//     if (!mongoose.Types.ObjectId.isValid(id)) {
+//       return res.status(400).json({ error: "Invalid order id" });
+//     }
+//     if (!incoming) return res.status(400).json({ error: "Missing status" });
+
+//     const nextLabel = toLabel(incoming);
+//     if (!nextLabel) {
+//       return res.status(400).json({ error: "Invalid status value" });
+//     }
+//     const nextCode = toCode(nextLabel); // PREPARING/READY/...
+
+//     const order = await Order.findById(id);
+//     if (!order) return res.status(404).json({ error: "Order not found" });
+
+//     if (branchId && String(order.branchId || "") !== branchId) {
+//       return res.status(403).json({ error: "Branch mismatch" });
+//     }
+
+//     // block terminal orders
+//     const curOrder = String(order.status || "").toLowerCase();
+//     if (["completed", "cancelled", "canceled", "rejected"].includes(curOrder)) {
+//       return res
+//         .status(409)
+//         .json({ error: "Order is terminal; cannot update" });
+//     }
+
+//     const now = new Date();
+//     const userId = req.user?.uid || req.user?.email || req.user?.sub || null;
+
+//     // ✅ choose which lines this request is allowed to modify
+//     const allItems = Array.isArray(order.items) ? order.items : [];
+//     const targetItems = isStationScoped
+//       ? allItems.filter(
+//           (it) => normStationFromItem(it?.kdsStationKey) === stationKey,
+//         )
+//       : allItems;
+
+//     if (isStationScoped && targetItems.length === 0) {
+//       return res.status(409).json({
+//         error: "No items for this station in the order",
+//         stationKey,
+//       });
+//     }
+
+//     // ✅ apply transition per-line (not whole order)
+//     let changedCount = 0;
+
+//     for (const it of targetItems) {
+//       // treat missing kdsStatus as PENDING (backward compatible)
+//       const curLineCode = normLineStatus(it?.kdsStatus);
+//       const curLineLabel = toLabel(curLineCode) || "Pending";
+
+//       // allow idempotent, and validate transition per item
+//       if (canTransition(curLineLabel, nextLabel)) {
+//         const before = normLineStatus(it.kdsStatus);
+//         it.kdsStatus = nextCode;
+//         it.kdsStatusUpdatedAt = now;
+//         it.kdsStatusUpdatedBy = userId;
+
+//         if (before !== nextCode) changedCount++;
+//       }
+//     }
+
+//     if (changedCount === 0) {
+//       return res.status(409).json({
+//         error:
+//           "No line items were updated (transition blocked or already same status)",
+//         stationKey: isStationScoped ? stationKey : "ALL",
+//         to: nextLabel,
+//       });
+//     }
+
+//     // ✅ derive order.status from line statuses (so customer/admin stays correct)
+//     const derivedLabel = deriveOrderStatusFromLines(order.items || []);
+//     const derivedCode = toCode(derivedLabel);
+
+//     // keep your existing timestamps logic BUT only when derived status reaches those stages
+//     order.status = derivedLabel;
+
+//     if (derivedCode === "READY") {
+//       if (!order.readyAt) order.readyAt = now;
+//     }
+
+//     if (derivedCode === "SERVED") {
+//       if (!order.servedAt) order.servedAt = now;
+//     }
+
+//     // optional: bump revision so KDS devices refresh attention, but NOT required
+//     // order.revision = (order.revision || 0) + 1;
+
+//     await order.save();
+
+//     return res.status(200).json({
+//       message: "Line status updated",
+//       scope: isStationScoped ? { stationKey } : { stationKey: "ALL" },
+//       changedCount,
+//       order: {
+//         id: String(order._id),
+//         status: order.status,
+//         readyAt: order.readyAt ?? null,
+//         servedAt: order.servedAt ?? null,
+//         updatedAt: order.updatedAt ?? null,
+//         revision: order.revision ?? 0,
+//       },
+//     });
+//   } catch (err) {
+//     console.error("updateKdsOrderStatus error:", err);
+//     return res.status(500).json({ error: err.message || "Server error" });
+//   }
+// };
 
 // --------------------------
 // Helpers for per-line status
