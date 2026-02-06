@@ -18,7 +18,7 @@ const PaymentSchema = new mongoose.Schema(
     // Optional: keep minimal gateway payload (safe subset)
     raw: { type: mongoose.Schema.Types.Mixed, default: null },
   },
-  { _id: false }
+  { _id: false },
 );
 
 const BillingLedgerSchema = new mongoose.Schema(
@@ -66,7 +66,8 @@ const BillingLedgerSchema = new mongoose.Schema(
     },
 
     // Idempotency (critical: prevents double-credit/double-debit)
-    idempotencyKey: { type: String, default: "", unique: true, sparse: true },
+    // idempotencyKey: { type: String, default: "", unique: true, sparse: true },
+    idempotencyKey: { type: String, default: null },
 
     // Payment info (empty for manual topups now)
     payment: { type: PaymentSchema, default: () => ({}) },
@@ -85,11 +86,23 @@ const BillingLedgerSchema = new mongoose.Schema(
     // Extra metadata
     meta: { type: mongoose.Schema.Types.Mixed, default: null },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 BillingLedgerSchema.index({ branchId: 1, createdAt: -1 });
+BillingLedgerSchema.index(
+  { idempotencyKey: 1 },
+  {
+    unique: true,
+    partialFilterExpression: {
+      idempotencyKey: { $exists: true, $type: "string", $ne: "" },
+    },
+  },
+);
+
+
 BillingLedgerSchema.index({ vendorId: 1, createdAt: -1 });
 BillingLedgerSchema.index({ entryType: 1, createdAt: -1 });
+
 
 export default mongoose.model("BillingLedger", BillingLedgerSchema);

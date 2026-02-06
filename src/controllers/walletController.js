@@ -196,7 +196,9 @@ export async function manualTopup(req, res) {
             bonusOrdersGranted: bonusOrders,
 
             status: "succeeded",
-            idempotencyKey: idemKey || "",
+            // idempotencyKey: idemKey || "",
+            ...(idemKey ? { idempotencyKey: idemKey } : {}), // ✅ only store when provided
+
 
             payment: {
               provider: "",
