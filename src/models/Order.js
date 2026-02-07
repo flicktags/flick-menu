@@ -48,7 +48,15 @@ const OrderSchema = new mongoose.Schema(
         // This is what each station updates (NOT the whole order).
         kdsStatus: {
           type: String,
-          enum: ["PENDING", "PREPARING", "READY", "SERVED", "COMPLETED", "CANCELLED", "REJECTED"],
+          enum: [
+            "PENDING",
+            "PREPARING",
+            "READY",
+            "SERVED",
+            "COMPLETED",
+            "CANCELLED",
+            "REJECTED",
+          ],
           default: "PENDING",
           uppercase: true,
           trim: true,
@@ -76,6 +84,16 @@ const OrderSchema = new mongoose.Schema(
       payload: { type: mongoose.Schema.Types.Mixed, default: null },
     },
 
+    // pricing: {
+    //   subtotal: Number,
+    //   serviceChargePercent: Number,
+    //   serviceChargeAmount: Number,
+    //   vatPercent: Number,
+    //   vatAmount: Number,
+    //   grandTotal: Number,
+    //   isVatInclusive: { type: Boolean, default: false },
+    //   subtotalExVat: { type: Number, default: 0 },
+    // },
     pricing: {
       subtotal: Number,
       serviceChargePercent: Number,
@@ -85,6 +103,14 @@ const OrderSchema = new mongoose.Schema(
       grandTotal: Number,
       isVatInclusive: { type: Boolean, default: false },
       subtotalExVat: { type: Number, default: 0 },
+
+      // ✅ NEW: Platform Fee snapshot (stored per order)
+      // platformFeePerOrderFils comes from branch.taxes.platformFeePerOrder (e.g. 80 fils)
+      // platformFee is the applied value in BHD (e.g. 0.080)
+      platformFeePerOrderFils: { type: Number, default: 0 },
+      platformFee: { type: Number, default: 0 }, // BHD
+      platformFeePaidByCustomer: { type: Boolean, default: false },
+      showPlatformFee: { type: Boolean, default: true },
     },
 
     remarks: String,
@@ -135,16 +161,31 @@ OrderSchema.index({ tokenNumber: 1, createdAt: -1 });
 OrderSchema.index({ publicToken: 1 }, { unique: true });
 OrderSchema.index({ branchId: 1, placedAt: -1, status: 1 });
 OrderSchema.index({ branchId: 1, createdAt: -1, status: 1 });
+OrderSchema.index({ branchId: 1, "pricing.platformFeePaidByCustomer": 1, createdAt: -1 });
 OrderSchema.index({ branchId: 1, revision: -1 });
 OrderSchema.index({ branchId: 1, status: 1, readyAt: 1 });
 OrderSchema.index({ branchId: 1, status: 1, servedAt: 1 });
 OrderSchema.index({ branchId: 1, readyAtCycle: 1, kitchenCycle: 1 });
 OrderSchema.index({ branchId: 1, businessDayLocal: 1, createdAt: -1 });
-OrderSchema.index({ branchId: 1, businessDayStartUTC: 1, businessDayEndUTC: 1 });
+OrderSchema.index({
+  branchId: 1,
+  businessDayStartUTC: 1,
+  businessDayEndUTC: 1,
+});
 
 OrderSchema.index({ branchId: 1, "items.kdsStationKey": 1, createdAt: -1 });
-OrderSchema.index({ branchId: 1, "items.kdsStationKey": 1, status: 1, createdAt: -1 });
-OrderSchema.index({ branchId: 1, "items.kdsStationKey": 1, "items.kdsStatus": 1, createdAt: -1 });
+OrderSchema.index({
+  branchId: 1,
+  "items.kdsStationKey": 1,
+  status: 1,
+  createdAt: -1,
+});
+OrderSchema.index({
+  branchId: 1,
+  "items.kdsStationKey": 1,
+  "items.kdsStatus": 1,
+  createdAt: -1,
+});
 
 export default mongoose.model("Order", OrderSchema);
 
@@ -183,7 +224,6 @@ export default mongoose.model("Order", OrderSchema);
 //         notes: String,
 //         lineTotal: Number,
 //         kdsStationKey: { type: String, default: "MAIN", uppercase: true, trim: true},
-
 
 //         // ✅ NEW: Out-of-stock support per line
 //         availability: {
@@ -282,6 +322,5 @@ export default mongoose.model("Order", OrderSchema);
 // });
 // OrderSchema.index({ branchId: 1, "items.kdsStationKey": 1, createdAt: -1 });
 // OrderSchema.index({ branchId: 1, "items.kdsStationKey": 1, status: 1, createdAt: -1 });
-
 
 // export default mongoose.model("Order", OrderSchema);
