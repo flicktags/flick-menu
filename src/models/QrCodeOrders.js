@@ -1,5 +1,3 @@
-
-
 // export default mongoose.model("QrCode", qrCodeSchema);
 
 import mongoose from "mongoose";
@@ -19,12 +17,13 @@ const qrCodeSchema = new mongoose.Schema(
       type: String,
       enum: ["room", "table"],
       required: true,
-      set: v => (typeof v === "string" ? v.toLowerCase() : v),
+      set: (v) => (typeof v === "string" ? v.toLowerCase() : v),
       index: true,
     },
 
     // Optional freeform label (e.g., "VIP Room")
     label: { type: String },
+    labelTemplate: { type: String, default: null, index: true },
 
     // Human-facing number like "table-6", "room-7"
     number: { type: String, required: true },
@@ -34,7 +33,7 @@ const qrCodeSchema = new mongoose.Schema(
 
     active: { type: Boolean, default: true },
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
 // Prevent duplicates per branch (e.g., two "table-6" under the same branch)

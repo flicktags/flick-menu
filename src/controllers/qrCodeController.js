@@ -786,7 +786,9 @@ export const generateCustomQrs = async (req, res) => {
     // 1) Auth
     const bearer = getBearerToken(req);
     const token = bearer || req.body?.token;
-    if (!token) return res.status(400).json({ message: "Firebase token required" });
+    if (!token) {
+      return res.status(400).json({ message: "Firebase token required" });
+    }
 
     const decoded = await admin.auth().verifyIdToken(token);
     const uid = decoded.uid;
@@ -801,7 +803,8 @@ export const generateCustomQrs = async (req, res) => {
     if (!ranges.length) {
       return res.status(400).json({
         message: "Missing required field: ranges[]",
-        hint: 'Example: [{type:"room", prefix:"room", start:101, end:120}]',
+        hint:
+          'Example: [{type:"room", prefix:"Room", start:101, end:120, labelTemplate:"First Floor"}]',
       });
     }
 
@@ -824,16 +827,53 @@ export const generateCustomQrs = async (req, res) => {
       return res.status(403).json({ message: "Forbidden" });
     }
 
-    // 4) Validate ranges and expand desired numbers
+    // ✅ Base URL
+    const PUBLIC_MENU_BASE_URL =
+      process.env.PUBLIC_MENU_BASE_URL || "https://menu.vuedine.com";
+
+    // ------------------------------------------------
+    // Helpers
+    // ------------------------------------------------
+    const normPrefix = (s) =>
+      String(s || "")
+        .trim()
+        .replace(/\s+/g, " ")
+        .replace(/[^a-zA-Z0-9 _-]/g, "") // keep safe chars
+        .trim();
+
+    const prefixToKey = (s) =>
+      normPrefix(s)
+        .toLowerCase()
+        .replace(/\s+/g, "_"); // "Swimming Pool" -> "swimming_pool"
+
+    const prefixToTitle = (s) => {
+      const x = normPrefix(s).replace(/[_-]+/g, " ");
+      if (!x) return "";
+      return x
+        .split(" ")
+        .filter(Boolean)
+        .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+        .join(" ");
+    };
+
+    // 4) Expand ranges -> desired list
     const desired = [];
     for (let i = 0; i < ranges.length; i++) {
       const r = ranges[i] || {};
 
-      const typeRaw = String(r.type || "").trim().toLowerCase();
-      const prefixRaw = String(r.prefix || "").trim();
+      const typeRaw = String(r.type || "").trim().toLowerCase(); // must be room/table
+      const prefixRaw = normPrefix(r.prefix || ""); // "Room", "Lobby", "SP"
 
       const start = parseInt(r.start, 10);
       const end = parseInt(r.end, 10);
+
+      const labelTemplate =
+        typeof r.labelTemplate === "string" && r.labelTemplate.trim()
+          ? r.labelTemplate.trim()
+          : null;
+
+      // optional per-item labels (rare, but keep supported)
+      const labels = Array.isArray(r.labels) ? r.labels : null;
 
       if (!["table", "room"].includes(typeRaw)) {
         return res.status(400).json({
@@ -842,7 +882,7 @@ export const generateCustomQrs = async (req, res) => {
       }
       if (!prefixRaw) {
         return res.status(400).json({
-          message: `ranges[${i}].prefix is required (e.g. "room", "lobby", "sp")`,
+          message: `ranges[${i}].prefix is required (e.g. "Room", "Lobby", "SP")`,
         });
       }
       if (!Number.isFinite(start) || !Number.isFinite(end)) {
@@ -855,24 +895,24 @@ export const generateCustomQrs = async (req, res) => {
       const to = Math.max(start, end);
       const count = to - from + 1;
 
-      const labels = Array.isArray(r.labels) ? r.labels : null;
       if (labels && labels.length !== count) {
         return res.status(400).json({
           message: `ranges[${i}].labels length must match range count (${count})`,
         });
       }
 
-      const labelTemplate =
-        typeof r.labelTemplate === "string" && r.labelTemplate.trim()
-          ? r.labelTemplate.trim()
-          : null;
+      const prefixKey = prefixToKey(prefixRaw);   // used in number (url-safe)
+      const prefixTitle = prefixToTitle(prefixRaw); // used in label
 
       for (let n = from; n <= to; n++) {
+        const number = `${prefixKey}-${n}`; // ✅ DO NOT CHANGE THIS (URL uses it)
         desired.push({
           typeRaw,
           prefixRaw,
+          prefixKey,
+          prefixTitle,
           n,
-          number: `${prefixRaw.toLowerCase()}-${n}`, // normalize prefix
+          number,
           labelTemplate,
           labels,
           rangeFrom: from,
@@ -880,7 +920,7 @@ export const generateCustomQrs = async (req, res) => {
       }
     }
 
-    // ✅ Deduplicate desired numbers (in case user overlaps ranges)
+    // ✅ Deduplicate desired numbers (overlapping ranges)
     const seen = new Set();
     const uniqueDesired = [];
     for (const d of desired) {
@@ -890,7 +930,7 @@ export const generateCustomQrs = async (req, res) => {
       uniqueDesired.push(d);
     }
 
-    // 5) Find existing numbers in DB -> SKIP them
+    // 5) Find existing -> SKIP (no overwrite ever)
     const existing = await QrCode.find({
       $and: [
         { $or: [{ branchId: String(branch._id) }, { branchId: branch._id }] },
@@ -898,12 +938,13 @@ export const generateCustomQrs = async (req, res) => {
         { number: { $in: uniqueDesired.map((d) => d.number) } },
       ],
     })
-      .select("number type qrId label")
+      .select("number type qrId label labelTemplate")
       .lean();
 
     const existingMap = new Map(existing.map((e) => [String(e.number), e]));
 
     const toCreate = uniqueDesired.filter((d) => !existingMap.has(d.number));
+
     const skippedExisting = uniqueDesired
       .filter((d) => existingMap.has(d.number))
       .map((d) => {
@@ -913,11 +954,11 @@ export const generateCustomQrs = async (req, res) => {
           type: e?.type ?? d.typeRaw,
           qrId: e?.qrId ?? null,
           label: e?.label ?? null,
+          labelTemplate: e?.labelTemplate ?? null,
           reason: "ALREADY_EXISTS",
         };
       });
 
-    // If nothing new to create -> return success with skipped list
     if (toCreate.length === 0) {
       return res.status(200).json({
         message: "No new QR created (all requested QRs already exist).",
@@ -929,7 +970,7 @@ export const generateCustomQrs = async (req, res) => {
       });
     }
 
-    // 6) Enforce limit atomically ONLY for what we will actually create
+    // 6) Enforce limit atomically ONLY for what will be created
     const totalToCreate = toCreate.length;
 
     const filter = {
@@ -945,7 +986,8 @@ export const generateCustomQrs = async (req, res) => {
 
     if (!prev) {
       return res.status(400).json({
-        message: "QR limit exceeded. Some QRs were skipped because they already exist, but remaining new QRs exceed your limit.",
+        message:
+          "QR limit exceeded. Some QRs were skipped because they already exist, but remaining new QRs exceed your limit.",
         requested: uniqueDesired.length,
         wouldCreate: totalToCreate,
         skippedExistingCount: skippedExisting.length,
@@ -953,48 +995,26 @@ export const generateCustomQrs = async (req, res) => {
       });
     }
 
-    // ✅ Base URL
-    const PUBLIC_MENU_BASE_URL =
-      process.env.PUBLIC_MENU_BASE_URL || "https://menu.vuedine.com";
-
-    // 7) Label template helper
-    function applyLabelTemplate(tpl, { typeRaw, prefixRaw, n }) {
-      const typeTitle = titleCaseType(typeRaw); // "Room"/"Table"
-      const prefixTitle =
-        String(prefixRaw || "")
-          .trim()
-          .replace(/[_-]+/g, " ")
-          .replace(/\b\w/g, (c) => c.toUpperCase()) || prefixRaw;
-
-      return String(tpl)
-        .replaceAll("{n}", String(n))
-        .replaceAll("{type}", String(typeRaw))
-        .replaceAll("{typeTitle}", String(typeTitle))
-        .replaceAll("{prefix}", String(prefixRaw))
-        .replaceAll("{prefixTitle}", String(prefixTitle));
-    }
-
-    // 8) Create only the missing ones
+    // 7) Create missing ones (no overwrite)
     const created = [];
 
     for (const d of toCreate) {
       const qrId = await generateQrId();
 
-      // label logic
-      let label = "";
+      // ✅ label should be PrefixTitle + number: "Room 101"
+      let label = `${d.prefixTitle} ${d.n}`.trim();
+
+      // if you ever want per-item labels override, keep it:
       if (d.labels) {
         const idx = d.n - d.rangeFrom;
-        label = String(d.labels[idx] || "").trim();
-      } else if (d.labelTemplate) {
-        label = applyLabelTemplate(d.labelTemplate, d);
-      } else {
-        label = applyLabelTemplate("{prefixTitle} {n}", d);
+        const custom = String(d.labels[idx] || "").trim();
+        if (custom) label = custom; // optional override
       }
 
       const customerUrl = buildCustomerQrUrl({
         baseUrl: PUBLIC_MENU_BASE_URL,
         publicSlug,
-        typeRaw: d.typeRaw,
+        typeRaw: d.typeRaw, // IMPORTANT: still room/table in query param
         qrId,
         qrNumber: d.number,
       });
@@ -1007,8 +1027,9 @@ export const generateCustomQrs = async (req, res) => {
           branchId: String(branch._id),
           vendorId: branch.vendorId,
           type: d.typeRaw,
-          label,
-          number: d.number,
+          label,                    // ✅ "Room 101"
+          labelTemplate: d.labelTemplate, // ✅ "First Floor"
+          number: d.number,         // ✅ "room-101" (or "lobby-1", "sp-2")
           qrUrl: qrImage,
           active: true,
         });
@@ -1019,6 +1040,7 @@ export const generateCustomQrs = async (req, res) => {
           vendorId: doc.vendorId,
           type: doc.type,
           label: doc.label,
+          labelTemplate: doc.labelTemplate ?? null,
           number: doc.number,
           qrUrl: doc.qrUrl,
           active: doc.active,
@@ -1028,13 +1050,14 @@ export const generateCustomQrs = async (req, res) => {
           encodedUrl: customerUrl,
         });
       } catch (e) {
-        // ✅ Safety: if a duplicate happens due to concurrency, SKIP it (no overwrite)
+        // ✅ Safety: concurrency duplicate -> SKIP, never overwrite
         if (e && e.code === 11000) {
           skippedExisting.push({
             number: d.number,
             type: d.typeRaw,
             qrId: null,
             label: null,
+            labelTemplate: d.labelTemplate ?? null,
             reason: "DUPLICATE_RACE_CONDITION",
           });
           continue;
@@ -1056,3 +1079,4 @@ export const generateCustomQrs = async (req, res) => {
     return res.status(500).json({ message: error.message });
   }
 };
+
