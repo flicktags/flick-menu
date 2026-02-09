@@ -17,7 +17,7 @@
 
 // src/routes/qrRoutes.js
 import express from "express";
-import generateQr, { getBranchQrs, deleteLatestQrs } from "../controllers/qrCodeController.js";
+import generateQr, { getBranchQrs, deleteLatestQrs, generateCustomQrs } from "../controllers/qrCodeController.js";
 
 const QrCodeRouter = express.Router();
 
