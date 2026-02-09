@@ -1080,3 +1080,99 @@ export const generateCustomQrs = async (req, res) => {
   }
 };
 
+export const deleteSelectedQrs = async (req, res) => {
+  try {
+    const token = getBearerToken(req);
+    if (!token) return res.status(400).json({ message: "Firebase token required" });
+
+    const decoded = await admin.auth().verifyIdToken(token);
+    const uid = decoded.uid;
+
+    const branchObjectId = String(req.params?.branchId || "").trim();
+    if (!branchObjectId) {
+      return res.status(400).json({ message: "branchId (Mongo _id) is required" });
+    }
+
+    // Accept either ids[] OR numbers[] (ids is preferred)
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
+    const numbers = Array.isArray(req.body?.numbers) ? req.body.numbers : [];
+
+    if (!ids.length && !numbers.length) {
+      return res.status(400).json({
+        message: 'Provide "ids": ["..."] or "numbers": ["room-101", ...]',
+      });
+    }
+
+    const branch = await Branch.findById(branchObjectId).lean();
+    if (!branch) return res.status(404).json({ message: "Branch not found" });
+
+    const vendor = await Vendor.findOne({ vendorId: branch.vendorId }).lean();
+    const isVendorOwner = !!vendor && vendor.userId === uid;
+    const isBranchManager = branch.userId === uid;
+    if (!isVendorOwner && !isBranchManager) {
+      return res.status(403).json({ message: "Forbidden" });
+    }
+
+    // ✅ Only delete QRs that belong to this branch + vendor
+    const baseMatch = {
+      $and: [
+        { $or: [{ branchId: branchObjectId }, { branchId: branch._id }] },
+        { vendorId: branch.vendorId },
+      ],
+    };
+
+    const match = { ...baseMatch };
+
+    if (ids.length) {
+      match.$and.push({ _id: { $in: ids } });
+    } else {
+      match.$and.push({ number: { $in: numbers.map((n) => String(n || "").trim()) } });
+    }
+
+    // First read what we are going to delete (for decrement counts + response)
+    const toDelete = await QrCode.find(match).select("_id type number").lean();
+
+    if (!toDelete.length) {
+      return res.status(200).json({
+        message: "No matching QRs found to delete.",
+        requestedIds: ids.length,
+        requestedNumbers: numbers.length,
+        deleted: 0,
+        deletedNumbers: [],
+      });
+    }
+
+    const delRes = await QrCode.deleteMany({ _id: { $in: toDelete.map((d) => d._id) } });
+    const deletedCount = delRes?.deletedCount || 0;
+
+    // ✅ Update Branch counters safely
+    if (deletedCount > 0) {
+      const tableDeleted = toDelete.filter((d) => String(d.type || "").toLowerCase() === "table").length;
+      const roomDeleted = toDelete.filter((d) => String(d.type || "").toLowerCase() === "room").length;
+
+      const fresh = await Branch.findById(branch._id, "qrGenerated qrGeneratedTable qrGeneratedRoom").lean();
+
+      const nextTotal = Math.max(0, Number(fresh?.qrGenerated ?? 0) - deletedCount);
+      const nextTable = Math.max(0, Number(fresh?.qrGeneratedTable ?? 0) - tableDeleted);
+      const nextRoom = Math.max(0, Number(fresh?.qrGeneratedRoom ?? 0) - roomDeleted);
+
+      await Branch.findByIdAndUpdate(branch._id, {
+        $set: {
+          qrGenerated: nextTotal,
+          qrGeneratedTable: nextTable,
+          qrGeneratedRoom: nextRoom,
+        },
+      });
+    }
+
+    return res.status(200).json({
+      message: `Deleted ${deletedCount} QR(s).`,
+      deleted: deletedCount,
+      deletedNumbers: toDelete.map((d) => String(d.number || "")),
+    });
+  } catch (err) {
+    console.error("QR Delete Selected Error:", err);
+    return res.status(500).json({ message: err.message });
+  }
+};
+

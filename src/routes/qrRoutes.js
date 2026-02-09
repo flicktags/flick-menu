@@ -17,7 +17,7 @@
 
 // src/routes/qrRoutes.js
 import express from "express";
-import generateQr, { getBranchQrs, deleteLatestQrs, generateCustomQrs } from "../controllers/qrCodeController.js";
+import generateQr, { getBranchQrs, deleteLatestQrs, generateCustomQrs, deleteSelectedQrs } from "../controllers/qrCodeController.js";
 
 const QrCodeRouter = express.Router();
 
@@ -26,6 +26,8 @@ QrCodeRouter.post("/generate", generateQr);
 QrCodeRouter.get("/branch/:branchId", getBranchQrs);
 QrCodeRouter.post("/branch/:branchId/delete-latest", deleteLatestQrs);
 QrCodeRouter.post("/generate-custom", generateCustomQrs);
+QrCodeRouter.post("/branch/:branchId/delete-selected", deleteSelectedQrs);
+
 
 
 export default QrCodeRouter;
