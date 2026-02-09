@@ -777,3 +777,282 @@ export const getQrBranchCatalog = async (req, res) => {
   }
 };
 
+// ✅ NEW: Hotel/Custom QR generator (range/prefix based)
+// POST /api/qrcode/generate-custom
+// ✅ NEW: Hotel/Custom QR generator (range/prefix based) - SKIP EXISTING
+// POST /api/qrcode/generate-custom
+export const generateCustomQrs = async (req, res) => {
+  try {
+    // 1) Auth
+    const bearer = getBearerToken(req);
+    const token = bearer || req.body?.token;
+    if (!token) return res.status(400).json({ message: "Firebase token required" });
+
+    const decoded = await admin.auth().verifyIdToken(token);
+    const uid = decoded.uid;
+
+    // 2) Inputs
+    const branchBusinessId = String(req.body?.branchId || "").trim();
+    const ranges = Array.isArray(req.body?.ranges) ? req.body.ranges : [];
+
+    if (!branchBusinessId) {
+      return res.status(400).json({ message: "Missing required field: branchId" });
+    }
+    if (!ranges.length) {
+      return res.status(400).json({
+        message: "Missing required field: ranges[]",
+        hint: 'Example: [{type:"room", prefix:"room", start:101, end:120}]',
+      });
+    }
+
+    // 3) Branch + permissions
+    const branch = await Branch.findOne({ branchId: branchBusinessId }).lean();
+    if (!branch) return res.status(404).json({ message: "Branch not found" });
+
+    const publicSlug = String(branch.publicSlug || "").trim();
+    if (!publicSlug) {
+      return res.status(400).json({
+        message:
+          "publicSlug missing for this branch. Generate/assign branch publicSlug first.",
+      });
+    }
+
+    const vendor = await Vendor.findOne({ vendorId: branch.vendorId }).lean();
+    const isVendorOwner = !!vendor && vendor.userId === uid;
+    const isBranchManager = branch.userId === uid;
+    if (!isVendorOwner && !isBranchManager) {
+      return res.status(403).json({ message: "Forbidden" });
+    }
+
+    // 4) Validate ranges and expand desired numbers
+    const desired = [];
+    for (let i = 0; i < ranges.length; i++) {
+      const r = ranges[i] || {};
+
+      const typeRaw = String(r.type || "").trim().toLowerCase();
+      const prefixRaw = String(r.prefix || "").trim();
+
+      const start = parseInt(r.start, 10);
+      const end = parseInt(r.end, 10);
+
+      if (!["table", "room"].includes(typeRaw)) {
+        return res.status(400).json({
+          message: `ranges[${i}].type must be "table" or "room"`,
+        });
+      }
+      if (!prefixRaw) {
+        return res.status(400).json({
+          message: `ranges[${i}].prefix is required (e.g. "room", "lobby", "sp")`,
+        });
+      }
+      if (!Number.isFinite(start) || !Number.isFinite(end)) {
+        return res.status(400).json({
+          message: `ranges[${i}] start/end must be integers`,
+        });
+      }
+
+      const from = Math.min(start, end);
+      const to = Math.max(start, end);
+      const count = to - from + 1;
+
+      const labels = Array.isArray(r.labels) ? r.labels : null;
+      if (labels && labels.length !== count) {
+        return res.status(400).json({
+          message: `ranges[${i}].labels length must match range count (${count})`,
+        });
+      }
+
+      const labelTemplate =
+        typeof r.labelTemplate === "string" && r.labelTemplate.trim()
+          ? r.labelTemplate.trim()
+          : null;
+
+      for (let n = from; n <= to; n++) {
+        desired.push({
+          typeRaw,
+          prefixRaw,
+          n,
+          number: `${prefixRaw.toLowerCase()}-${n}`, // normalize prefix
+          labelTemplate,
+          labels,
+          rangeFrom: from,
+        });
+      }
+    }
+
+    // ✅ Deduplicate desired numbers (in case user overlaps ranges)
+    const seen = new Set();
+    const uniqueDesired = [];
+    for (const d of desired) {
+      const key = `${d.typeRaw}::${d.number}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      uniqueDesired.push(d);
+    }
+
+    // 5) Find existing numbers in DB -> SKIP them
+    const existing = await QrCode.find({
+      $and: [
+        { $or: [{ branchId: String(branch._id) }, { branchId: branch._id }] },
+        { vendorId: branch.vendorId },
+        { number: { $in: uniqueDesired.map((d) => d.number) } },
+      ],
+    })
+      .select("number type qrId label")
+      .lean();
+
+    const existingMap = new Map(existing.map((e) => [String(e.number), e]));
+
+    const toCreate = uniqueDesired.filter((d) => !existingMap.has(d.number));
+    const skippedExisting = uniqueDesired
+      .filter((d) => existingMap.has(d.number))
+      .map((d) => {
+        const e = existingMap.get(d.number);
+        return {
+          number: d.number,
+          type: e?.type ?? d.typeRaw,
+          qrId: e?.qrId ?? null,
+          label: e?.label ?? null,
+          reason: "ALREADY_EXISTS",
+        };
+      });
+
+    // If nothing new to create -> return success with skipped list
+    if (toCreate.length === 0) {
+      return res.status(200).json({
+        message: "No new QR created (all requested QRs already exist).",
+        requested: uniqueDesired.length,
+        created: 0,
+        skipped: skippedExisting.length,
+        skippedExisting,
+        qrs: [],
+      });
+    }
+
+    // 6) Enforce limit atomically ONLY for what we will actually create
+    const totalToCreate = toCreate.length;
+
+    const filter = {
+      branchId: branchBusinessId,
+      $expr: { $lte: [{ $add: ["$qrGenerated", totalToCreate] }, "$qrLimit"] },
+    };
+
+    const prev = await Branch.findOneAndUpdate(
+      filter,
+      { $inc: { qrGenerated: totalToCreate } },
+      { new: false }
+    ).lean();
+
+    if (!prev) {
+      return res.status(400).json({
+        message: "QR limit exceeded. Some QRs were skipped because they already exist, but remaining new QRs exceed your limit.",
+        requested: uniqueDesired.length,
+        wouldCreate: totalToCreate,
+        skippedExistingCount: skippedExisting.length,
+        skippedExisting,
+      });
+    }
+
+    // ✅ Base URL
+    const PUBLIC_MENU_BASE_URL =
+      process.env.PUBLIC_MENU_BASE_URL || "https://menu.vuedine.com";
+
+    // 7) Label template helper
+    function applyLabelTemplate(tpl, { typeRaw, prefixRaw, n }) {
+      const typeTitle = titleCaseType(typeRaw); // "Room"/"Table"
+      const prefixTitle =
+        String(prefixRaw || "")
+          .trim()
+          .replace(/[_-]+/g, " ")
+          .replace(/\b\w/g, (c) => c.toUpperCase()) || prefixRaw;
+
+      return String(tpl)
+        .replaceAll("{n}", String(n))
+        .replaceAll("{type}", String(typeRaw))
+        .replaceAll("{typeTitle}", String(typeTitle))
+        .replaceAll("{prefix}", String(prefixRaw))
+        .replaceAll("{prefixTitle}", String(prefixTitle));
+    }
+
+    // 8) Create only the missing ones
+    const created = [];
+
+    for (const d of toCreate) {
+      const qrId = await generateQrId();
+
+      // label logic
+      let label = "";
+      if (d.labels) {
+        const idx = d.n - d.rangeFrom;
+        label = String(d.labels[idx] || "").trim();
+      } else if (d.labelTemplate) {
+        label = applyLabelTemplate(d.labelTemplate, d);
+      } else {
+        label = applyLabelTemplate("{prefixTitle} {n}", d);
+      }
+
+      const customerUrl = buildCustomerQrUrl({
+        baseUrl: PUBLIC_MENU_BASE_URL,
+        publicSlug,
+        typeRaw: d.typeRaw,
+        qrId,
+        qrNumber: d.number,
+      });
+
+      const qrImage = await QRCode.toDataURL(customerUrl);
+
+      try {
+        const doc = await QrCode.create({
+          qrId,
+          branchId: String(branch._id),
+          vendorId: branch.vendorId,
+          type: d.typeRaw,
+          label,
+          number: d.number,
+          qrUrl: qrImage,
+          active: true,
+        });
+
+        created.push({
+          qrId: doc.qrId,
+          branchId: doc.branchId,
+          vendorId: doc.vendorId,
+          type: doc.type,
+          label: doc.label,
+          number: doc.number,
+          qrUrl: doc.qrUrl,
+          active: doc.active,
+          _id: doc._id,
+          createdAt: doc.createdAt,
+          updatedAt: doc.updatedAt,
+          encodedUrl: customerUrl,
+        });
+      } catch (e) {
+        // ✅ Safety: if a duplicate happens due to concurrency, SKIP it (no overwrite)
+        if (e && e.code === 11000) {
+          skippedExisting.push({
+            number: d.number,
+            type: d.typeRaw,
+            qrId: null,
+            label: null,
+            reason: "DUPLICATE_RACE_CONDITION",
+          });
+          continue;
+        }
+        throw e;
+      }
+    }
+
+    return res.status(201).json({
+      message: "Custom QR codes generated successfully (existing skipped)",
+      requested: uniqueDesired.length,
+      created: created.length,
+      skipped: skippedExisting.length,
+      skippedExisting,
+      qrs: created,
+    });
+  } catch (error) {
+    console.error("QR Custom Generate Error:", error);
+    return res.status(500).json({ message: error.message });
+  }
+};

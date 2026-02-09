@@ -25,5 +25,7 @@ const QrCodeRouter = express.Router();
 QrCodeRouter.post("/generate", generateQr);
 QrCodeRouter.get("/branch/:branchId", getBranchQrs);
 QrCodeRouter.post("/branch/:branchId/delete-latest", deleteLatestQrs);
+QrCodeRouter.post("/generate-custom", generateCustomQrs);
+
 
 export default QrCodeRouter;
