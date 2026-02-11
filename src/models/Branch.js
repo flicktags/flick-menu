@@ -106,7 +106,7 @@ const branchSchema = new mongoose.Schema(
     venueType: { type: String },
     // ✅ NEW: station-based KDS behavior toggle (default false)
     stationBased: { type: Boolean, default: false },
-
+    callAssistance: {type: Boolean, default: false},
     serviceFeatures: [
       { type: String, enum: ["dine_in", "takeaway", "delivery"] },
     ],

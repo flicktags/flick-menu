@@ -90,6 +90,7 @@ export const registerBranch = async (req, res) => {
 
       // ✅ NEW
       stationBased,
+      callAssistance,
     } = req.body;
 
     if (!token) {
@@ -153,6 +154,9 @@ export const registerBranch = async (req, res) => {
     const stationBasedBool =
       stationBased !== undefined ? toBool(stationBased) : false;
 
+      const callAssistanceBool =
+      callAssistance !== undefined ? toBool(callAssistance) : false;
+
     // create branch
     const branch = await Branch.create({
       branchId,
@@ -165,6 +169,7 @@ export const registerBranch = async (req, res) => {
 
       // ✅ NEW
       stationBased: stationBasedBool,
+      callAssistance: callAssistanceBool,
 
       // serviceFeatures: if FE sends, allow only whitelisted keys
       serviceFeatures: Array.isArray(serviceFeatures)
@@ -338,6 +343,10 @@ export const updateBranchInformation = async (req, res) => {
     // MUST allow false, so check undefined only
     if (b.stationBased !== undefined) {
       branch.stationBased = toBool(b.stationBased);
+    }
+
+    if (b.callAssistance !== undefined) {
+      branch.callAssistance = toBool(b.callAssistance);
     }
 
     // Service features
