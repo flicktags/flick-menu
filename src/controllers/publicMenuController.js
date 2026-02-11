@@ -302,6 +302,7 @@ export const getPublicMenuTypes = async (req, res) => {
         currency: branch.currency,
         serviceFeatures: branch.serviceFeatures || [],
         openingHours: branch.openingHours || {},
+        callAssistance: branch.callAssistance ?? false,
         contact: branch.contact || {},
         // ✅ NEW
         branding: {
@@ -375,6 +376,7 @@ export const getPublicMenu = async (req, res) => {
         // ✅ NEW
         serviceFeatures: branch.serviceFeatures ?? [],
         openingHours: branch.openingHours ?? null,
+        callAssistance: branch.callAssistance ?? false,
         contact: branch.contact ?? null,
         timeZone: branch.timeZone ?? null,
       },
