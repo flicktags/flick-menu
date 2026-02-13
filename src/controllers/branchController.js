@@ -91,6 +91,7 @@ export const registerBranch = async (req, res) => {
       // ✅ NEW
       stationBased,
       callAssistance,
+      customerInformation,
     } = req.body;
 
     if (!token) {
@@ -154,8 +155,11 @@ export const registerBranch = async (req, res) => {
     const stationBasedBool =
       stationBased !== undefined ? toBool(stationBased) : false;
 
-      const callAssistanceBool =
+    const callAssistanceBool =
       callAssistance !== undefined ? toBool(callAssistance) : false;
+
+    const customerInformationBool =
+      customerInformation !== undefined ? toBool(customerInformation) : false;
 
     // create branch
     const branch = await Branch.create({
@@ -170,6 +174,7 @@ export const registerBranch = async (req, res) => {
       // ✅ NEW
       stationBased: stationBasedBool,
       callAssistance: callAssistanceBool,
+      customerInformation: customerInformationBool,
 
       // serviceFeatures: if FE sends, allow only whitelisted keys
       serviceFeatures: Array.isArray(serviceFeatures)
@@ -348,6 +353,11 @@ export const updateBranchInformation = async (req, res) => {
     if (b.callAssistance !== undefined) {
       branch.callAssistance = toBool(b.callAssistance);
     }
+
+    if (b.customerInformation !== undefined) {
+      branch.customerInformation = toBool(b.customerInformation);
+    }
+
 
     // Service features
     if (Array.isArray(b.serviceFeatures)) {
@@ -701,8 +711,7 @@ export const patchBranchCustomization = async (req, res) => {
     }
 
     // ✅ MUST use hasOwnProperty so "false" is not ignored
-    const hasOwn = (obj, key) =>
-      Object.prototype.hasOwnProperty.call(obj, key);
+    const hasOwn = (obj, key) => Object.prototype.hasOwnProperty.call(obj, key);
 
     // Ensure customization object exists
     if (!branch.customization) branch.customization = {};
@@ -765,7 +774,6 @@ export const patchBranchCustomization = async (req, res) => {
     return res.status(500).json({ message: err.message });
   }
 };
-
 
 // export const patchBranchCustomization = async (req, res) => {
 //   try {
