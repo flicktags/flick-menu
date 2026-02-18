@@ -78,7 +78,7 @@ const sizeSchema = new Schema(
     label: { type: String, required: true, trim: true },
     price: { type: Number, required: true, min: 0 },
   },
-  { _id: false }
+  { _id: false },
 );
 
 const discountSchema = new Schema(
@@ -87,7 +87,7 @@ const discountSchema = new Schema(
     value: { type: Number, required: true, min: 0 },
     validUntil: { type: Date },
   },
-  { _id: false }
+  { _id: false },
 );
 
 const addonOptionSchema = new Schema(
@@ -97,7 +97,7 @@ const addonOptionSchema = new Schema(
     sku: { type: String, trim: true },
     isDefault: { type: Boolean, default: false },
   },
-  { _id: false }
+  { _id: false },
 );
 
 const addonSchema = new Schema(
@@ -108,7 +108,44 @@ const addonSchema = new Schema(
     max: { type: Number, default: 1 },
     options: { type: [addonOptionSchema], default: [] },
   },
-  { _id: false }
+  { _id: false },
+);
+
+const timeWindowSchema = new Schema(
+  {
+    start: { type: String, required: true, trim: true }, // "HH:mm"
+    end: { type: String, required: true, trim: true }, // "HH:mm"
+  },
+  { _id: false },
+);
+
+const perDaySchema = new Schema(
+  {
+    sun: { type: [timeWindowSchema], default: [] },
+    mon: { type: [timeWindowSchema], default: [] },
+    tue: { type: [timeWindowSchema], default: [] },
+    wed: { type: [timeWindowSchema], default: [] },
+    thu: { type: [timeWindowSchema], default: [] },
+    fri: { type: [timeWindowSchema], default: [] },
+    sat: { type: [timeWindowSchema], default: [] },
+  },
+  { _id: false },
+);
+
+const availabilitySchema = new Schema(
+  {
+    enabled: { type: Boolean, default: false }, // timelyBased
+    type: { type: String, enum: ["FIXED", "PER_DAY"], default: "FIXED" },
+    timezone: { type: String, default: "Asia/Bahrain", trim: true },
+
+    fixed: {
+      start: { type: String, trim: true, default: "" }, // "HH:mm"
+      end: { type: String, trim: true, default: "" }, // "HH:mm"
+    },
+
+    perDay: { type: perDaySchema, default: () => ({}) },
+  },
+  { _id: false },
 );
 
 const menuItemSchema = new Schema(
@@ -116,7 +153,13 @@ const menuItemSchema = new Schema(
     branchId: { type: String, required: true, index: true },
     vendorId: { type: String, required: true, index: true },
 
-    sectionKey: { type: String, required: true, uppercase: true, trim: true, index: true },
+    sectionKey: {
+      type: String,
+      required: true,
+      uppercase: true,
+      trim: true,
+      index: true,
+    },
     sortOrder: { type: Number, default: 0 },
 
     itemType: { type: String, default: "", trim: true },
@@ -137,6 +180,7 @@ const menuItemSchema = new Schema(
     isActive: { type: Boolean, default: true },
     isAvailable: { type: Boolean, default: true },
     isSpicy: { type: Boolean, default: false },
+    availability: { type: availabilitySchema, default: undefined },
 
     calories: { type: Number, default: 0, min: 0 },
     sku: { type: String, trim: true },
@@ -156,17 +200,34 @@ const menuItemSchema = new Schema(
     discount: { type: discountSchema, default: undefined },
 
     // ---------- NEW: Group-level category fields ----------
-    foodCategoryGroupId:          { type: String, default: null, index: true },
-    foodCategoryGroupCode:        { type: String, default: "", uppercase: true, trim: true, index: true },
+    foodCategoryGroupId: { type: String, default: null, index: true },
+    foodCategoryGroupCode: {
+      type: String,
+      default: "",
+      uppercase: true,
+      trim: true,
+      index: true,
+    },
     foodCategoryGroupNameEnglish: { type: String, default: "", trim: true },
-    kdsStationKey: { type: String, default: "MAIN", uppercase: true, trim: true, index: true },
+    kdsStationKey: {
+      type: String,
+      default: "MAIN",
+      uppercase: true,
+      trim: true,
+      index: true,
+    },
 
     // ------------------------------------------------------
   },
-  { timestamps: true }
+  { timestamps: true },
 );
 
-menuItemSchema.index({ branchId: 1, sectionKey: 1, sortOrder: 1, nameEnglish: 1 });
+menuItemSchema.index({
+  branchId: 1,
+  sectionKey: 1,
+  sortOrder: 1,
+  nameEnglish: 1,
+});
 menuItemSchema.index({ sectionKey: 1, foodCategoryGroupCode: 1, isActive: 1 });
 
 export default model("MenuItem", menuItemSchema);
