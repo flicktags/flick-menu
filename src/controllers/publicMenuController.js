@@ -436,7 +436,7 @@ export const getPublicSectionItems = async (req, res) => {
       .select(
         "_id branchId vendorId sectionKey sortOrder itemType " +
           "nameEnglish nameArabic description descriptionArabic imageUrl videoUrl " +
-          "allergens tags isFeatured isActive isAvailable isSpicy " +
+          "allergens tags isFeatured isActive isAvailable isSpicy " + "availability " +
           "calories sku preparationTimeInMinutes ingredients addons " +
           "isSizedBased sizes fixedPrice offeredPrice discount createdAt updatedAt",
       )
@@ -651,7 +651,7 @@ export const getPublicGroupedTree = async (req, res) => {
       .select(
         "_id branchId vendorId sectionKey sortOrder itemType " +
           "nameEnglish nameArabic description descriptionArabic imageUrl videoUrl " +
-          "allergens tags isFeatured isActive isAvailable isSpicy " +
+          "allergens tags isFeatured isActive isAvailable isSpicy " + "availability " +
           "calories sku preparationTimeInMinutes ingredients addons " +
           "isSizedBased sizes fixedPrice offeredPrice discount createdAt updatedAt " +
           "foodCategoryGroupCode foodCategoryGroupId foodCategoryGroupNameEnglish",
