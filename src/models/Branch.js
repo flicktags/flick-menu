@@ -46,6 +46,8 @@ const stationSchema = new mongoose.Schema(
     sortOrder: { type: Number, default: 0 },
     printers: { type: [String], default: [] }, // optional
 
+    allowOrderModification: { type: Boolean, default: true },
+
     // ✅ NEW: PIN auth for station (hashed)
     pinHash: { type: String, default: "" },
     pinUpdatedAt: { type: Date, default: null },

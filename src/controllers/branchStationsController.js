@@ -12,15 +12,34 @@ const asInt = (v, def = 0) => {
 };
 
 const WEAK_PINS = new Set([
-  "000000","111111","222222","333333","444444","555555","666666","777777","888888","999999",
-  "123456","234567","345678","456789",
-  "987654","876543","765432","654321","543210",
-  "112233","121212","200000"
+  "000000",
+  "111111",
+  "222222",
+  "333333",
+  "444444",
+  "555555",
+  "666666",
+  "777777",
+  "888888",
+  "999999",
+  "123456",
+  "234567",
+  "345678",
+  "456789",
+  "987654",
+  "876543",
+  "765432",
+  "654321",
+  "543210",
+  "112233",
+  "121212",
+  "200000",
 ]);
 
 function isSequential(pin) {
   const s = pin;
-  let asc = true, desc = true;
+  let asc = true,
+    desc = true;
   for (let i = 1; i < s.length; i++) {
     const prev = s.charCodeAt(i - 1);
     const cur = s.charCodeAt(i);
@@ -108,7 +127,9 @@ async function ensurePinUniqueOrThrow({ stations, pin, excludeKey }) {
     if (match) {
       const existingKey = asStr(s?.key).trim();
       const existingName = asStr(s?.nameEnglish).trim();
-      const label = existingName ? `${existingKey} (${existingName})` : existingKey;
+      const label = existingName
+        ? `${existingKey} (${existingName})`
+        : existingKey;
 
       const err = new Error("PIN already used");
       err.statusCode = 409;
@@ -173,10 +194,16 @@ export const createStation = async (req, res) => {
         : asStr(req.body?.isEnabled).toLowerCase() === "true";
 
     const pin = asStr(req.body?.pin).trim();
+    const allowOrderModification =
+      typeof req.body?.allowOrderModification === "boolean"
+        ? req.body.allowOrderModification
+        : true;
 
     if (!key) return res.status(400).json({ error: "key is required" });
-    if (!nameEnglish) return res.status(400).json({ error: "nameEnglish is required" });
-    if (key === "MAIN") return res.status(409).json({ error: "MAIN is reserved" });
+    if (!nameEnglish)
+      return res.status(400).json({ error: "nameEnglish is required" });
+    if (key === "MAIN")
+      return res.status(409).json({ error: "MAIN is reserved" });
 
     // ✅ PIN mandatory
     if (!pin) return res.status(400).json({ error: "PIN is required" });
@@ -184,13 +211,16 @@ export const createStation = async (req, res) => {
     const pinCheck = validateStrongPin(pin);
     if (!pinCheck.ok) return res.status(400).json({ error: pinCheck.reason });
 
-    const branch = await Branch.findOne({ branchId }).select("stations vendorId branchId");
+    const branch = await Branch.findOne({ branchId }).select(
+      "stations vendorId branchId",
+    );
     if (!branch) return res.status(404).json({ error: "Branch not found" });
 
     branch.stations = Array.isArray(branch.stations) ? branch.stations : [];
 
     const exists = branch.stations.some((s) => normalizeKey(s.key) === key);
-    if (exists) return res.status(409).json({ error: "Station key already exists", key });
+    if (exists)
+      return res.status(409).json({ error: "Station key already exists", key });
 
     // ✅ ensure PIN is unique within branch
     await ensurePinUniqueOrThrow({ stations: branch.stations, pin });
@@ -204,7 +234,9 @@ export const createStation = async (req, res) => {
       attempts++;
     }
     if (ids.has(stationId)) {
-      return res.status(500).json({ error: "Could not generate unique stationId" });
+      return res
+        .status(500)
+        .json({ error: "Could not generate unique stationId" });
     }
 
     const now = new Date();
@@ -217,7 +249,11 @@ export const createStation = async (req, res) => {
       nameArabic,
       isEnabled: req.body?.isEnabled === undefined ? true : isEnabled,
       sortOrder,
-      printers: Array.isArray(req.body?.printers) ? req.body.printers.map(String) : [],
+      printers: Array.isArray(req.body?.printers)
+        ? req.body.printers.map(String)
+        : [],
+      allowOrderModification, // ✅ NEW
+
       pinHash,
       pinUpdatedAt: now,
       pinFailedCount: 0,
@@ -261,31 +297,37 @@ export const updateStation = async (req, res) => {
   try {
     const branchId = asStr(req.params.branchId).trim();
     const key = normalizeKey(req.params.key);
-    if (!branchId || !key) return res.status(400).json({ error: "branchId and key are required" });
+    if (!branchId || !key)
+      return res.status(400).json({ error: "branchId and key are required" });
 
     const ok = await assertUserOwnsBranch(req, branchId);
     if (!ok) return res.status(403).json({ error: "Forbidden" });
 
     // Keep server safety even if UI hides MAIN
-    if (key === "MAIN") return res.status(409).json({ error: "MAIN cannot be modified here" });
+    if (key === "MAIN")
+      return res.status(409).json({ error: "MAIN cannot be modified here" });
 
     const branch = await Branch.findOne({ branchId }).select("stations");
     if (!branch) return res.status(404).json({ error: "Branch not found" });
 
     const list = Array.isArray(branch.stations) ? branch.stations : [];
     const idx = list.findIndex((s) => normalizeKey(s.key) === key);
-    if (idx === -1) return res.status(404).json({ error: "Station not found", key });
+    if (idx === -1)
+      return res.status(404).json({ error: "Station not found", key });
 
     const st = list[idx];
     const now = new Date();
 
     if (req.body?.nameEnglish !== undefined) {
       const v = asStr(req.body.nameEnglish).trim();
-      if (!v) return res.status(400).json({ error: "nameEnglish cannot be empty" });
+      if (!v)
+        return res.status(400).json({ error: "nameEnglish cannot be empty" });
       st.nameEnglish = v;
     }
-    if (req.body?.nameArabic !== undefined) st.nameArabic = asStr(req.body.nameArabic).trim();
-    if (req.body?.sortOrder !== undefined) st.sortOrder = asInt(req.body.sortOrder, st.sortOrder ?? 0);
+    if (req.body?.nameArabic !== undefined)
+      st.nameArabic = asStr(req.body.nameArabic).trim();
+    if (req.body?.sortOrder !== undefined)
+      st.sortOrder = asInt(req.body.sortOrder, st.sortOrder ?? 0);
     if (req.body?.isEnabled !== undefined) {
       st.isEnabled =
         typeof req.body.isEnabled === "boolean"
@@ -293,15 +335,26 @@ export const updateStation = async (req, res) => {
           : asStr(req.body.isEnabled).toLowerCase() === "true";
     }
     if (req.body?.printers !== undefined) {
-      st.printers = Array.isArray(req.body.printers) ? req.body.printers.map(String) : [];
+      st.printers = Array.isArray(req.body.printers)
+        ? req.body.printers.map(String)
+        : [];
+    }
+    if (req.body?.allowOrderModification !== undefined) {
+      st.allowOrderModification =
+        typeof req.body.allowOrderModification === "boolean"
+          ? req.body.allowOrderModification
+          : asStr(req.body.allowOrderModification).toLowerCase() === "true";
     }
 
     // ✅ PIN handling (optional if already exists; required if station has no PIN)
-    const incomingPin = req.body?.pin === undefined ? null : asStr(req.body.pin).trim();
-    const hasPinAlready = !!(asStr(st?.pinHash).trim());
+    const incomingPin =
+      req.body?.pin === undefined ? null : asStr(req.body.pin).trim();
+    const hasPinAlready = !!asStr(st?.pinHash).trim();
 
     if (!hasPinAlready && (incomingPin == null || incomingPin === "")) {
-      return res.status(400).json({ error: "PIN is required for this station" });
+      return res
+        .status(400)
+        .json({ error: "PIN is required for this station" });
     }
 
     if (incomingPin != null && incomingPin !== "") {
@@ -323,7 +376,9 @@ export const updateStation = async (req, res) => {
 
     st.updatedAt = now;
 
-    branch.stations = list.sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+    branch.stations = list.sort(
+      (a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0),
+    );
     await branch.save();
 
     try {
@@ -353,18 +408,22 @@ export const deleteStation = async (req, res) => {
   try {
     const branchId = asStr(req.params.branchId).trim();
     const key = normalizeKey(req.params.key);
-    if (!branchId || !key) return res.status(400).json({ error: "branchId and key are required" });
+    if (!branchId || !key)
+      return res.status(400).json({ error: "branchId and key are required" });
 
     const ok = await assertUserOwnsBranch(req, branchId);
     if (!ok) return res.status(403).json({ error: "Forbidden" });
 
-    if (key === "MAIN") return res.status(409).json({ error: "MAIN cannot be deleted" });
+    if (key === "MAIN")
+      return res.status(409).json({ error: "MAIN cannot be deleted" });
 
     const branch = await Branch.findOne({ branchId }).select("stations");
     if (!branch) return res.status(404).json({ error: "Branch not found" });
 
     const before = (branch.stations || []).length;
-    branch.stations = (branch.stations || []).filter((s) => normalizeKey(s.key) !== key);
+    branch.stations = (branch.stations || []).filter(
+      (s) => normalizeKey(s.key) !== key,
+    );
 
     if (branch.stations.length === before) {
       return res.status(404).json({ error: "Station not found", key });
@@ -425,7 +484,9 @@ export const reorderStations = async (req, res) => {
       s.updatedAt = now;
     });
 
-    branch.stations = [...list].sort((a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0));
+    branch.stations = [...list].sort(
+      (a, b) => (a.sortOrder ?? 0) - (b.sortOrder ?? 0),
+    );
     await branch.save();
 
     try {
@@ -921,4 +982,3 @@ export const reorderStations = async (req, res) => {
 //     return res.status(500).json({ error: "Internal server error" });
 //   }
 // };
-
