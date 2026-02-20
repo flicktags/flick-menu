@@ -294,6 +294,7 @@ function filterItemsForStation(items, stationKey, isStationFiltered) {
 // GET /api/kds/overview?branchId=BR-000004&station=BAR
 // Also supports: &stationKey=BAR
 // ==============================
+
 export const getKdsOverview = async (req, res) => {
   try {
     const branchId = String(req.query.branchId || "").trim();
@@ -304,39 +305,72 @@ export const getKdsOverview = async (req, res) => {
       String(req.query.stationKey || "").trim() ||
       String(req.query.station || "").trim();
 
-    const stationKey = stationRaw ? stationRaw.toUpperCase() : "";
-    const isStationFiltered =
-      stationKey.length > 0 && stationKey !== "ALL" && stationKey !== "MAIN";
+    // what client requested (for UI)
+    const requestedStationKey = stationRaw ? stationRaw.toUpperCase() : "";
+
+    // we may override this to ALL if station is view-only
+    let effectiveStationKey = requestedStationKey;
+
+    // MAIN behaves like ALL (existing behavior)
+    if (
+      !effectiveStationKey ||
+      effectiveStationKey === "MAIN" ||
+      effectiveStationKey === "ALL"
+    ) {
+      effectiveStationKey = "ALL";
+    }
+
+    // these are decided after branch load
+    let isStationFiltered = effectiveStationKey !== "ALL";
+    let isViewOnlyStation = false;
 
     const branch = await Branch.findOne({ branchId }).lean();
     if (!branch) return res.status(404).json({ error: "Branch not found" });
 
-    // ✅ validate stationKey exists in branch (only if station filter is used)
-    if (isStationFiltered) {
-      const stations = Array.isArray(branch.stations)
-        ? branch.stations
-        : Array.isArray(branch.kdsStations)
-          ? branch.kdsStations
-          : [];
+    // ✅ validate stationKey exists in branch (only if a station was requested)
+    const stations = Array.isArray(branch.stations)
+      ? branch.stations
+      : Array.isArray(branch.kdsStations)
+        ? branch.kdsStations
+        : [];
 
-      const allowed = new Set(
-        stations
-          .filter((s) => s && s.isEnabled !== false)
-          .map((s) => normStationKey(s.key))
-          .filter(Boolean),
-      );
+    const allowed = new Set(
+      stations
+        .filter((s) => s && s.isEnabled !== false)
+        .map((s) => normStationKey(s.key))
+        .filter(Boolean),
+    );
 
-      // Always allow MAIN as fallback
-      allowed.add("MAIN");
+    // Always allow MAIN as fallback
+    allowed.add("MAIN");
 
-      if (!allowed.has(stationKey)) {
+    // If caller sent a station explicitly (other than ALL/MAIN), validate it
+    if (
+      requestedStationKey &&
+      requestedStationKey !== "ALL" &&
+      requestedStationKey !== "MAIN"
+    ) {
+      if (!allowed.has(requestedStationKey)) {
         return res.status(400).json({
           error: "Invalid station",
-          station: stationKey,
+          station: requestedStationKey,
           allowed: Array.from(allowed),
         });
       }
+
+      // ✅ view-only stations should see ALL orders/items like MAIN/ALL
+      const stationObj = stations.find(
+        (s) => normStationKey(s?.key) === requestedStationKey,
+      );
+
+      if (stationObj && stationObj.allowOrderModification === false) {
+        isViewOnlyStation = true;
+        effectiveStationKey = "ALL"; // ✅ key change: do not filter items
+      }
     }
+
+    // final filtering decision
+    isStationFiltered = effectiveStationKey !== "ALL";
 
     const tz = String(branch.timeZone || req.query.tz || "Asia/Bahrain").trim();
     const openingHours = branch.openingHours || {};
@@ -376,7 +410,7 @@ export const getKdsOverview = async (req, res) => {
     };
 
     // If you later add help.stationKey, you can filter here:
-    // if (isStationFiltered) helpFindQuery.stationKey = stationKey;
+    // if (isStationFiltered) helpFindQuery.stationKey = effectiveStationKey;
 
     const helpRequests = await HelpRequest.find(helpFindQuery)
       .sort({ lastPingAt: -1 })
@@ -401,8 +435,9 @@ export const getKdsOverview = async (req, res) => {
       },
     );
 
+    // ✅ Station-scoped auto-serve ONLY when we are truly filtering by station.
     if (isStationFiltered) {
-      const sk = stationKey; // already uppercase
+      const sk = effectiveStationKey; // ✅ use effective station key
       const toAutoServe = await Order.find({
         branchId,
         ...timeQuery,
@@ -503,7 +538,6 @@ export const getKdsOverview = async (req, res) => {
         pingCount: h.pingCount ?? 1,
         lastPingAt: h.lastPingAt ?? h.createdAt ?? null,
         createdAt: h.createdAt ?? null,
-        // stationKey: h.stationKey ?? null, // if you add it later
       };
     });
 
@@ -520,9 +554,7 @@ export const getKdsOverview = async (req, res) => {
       // ✅ Backward compatibility: treat missing kdsStatus as PENDING (PER ORDER)
       const safeItems = (Array.isArray(o.items) ? o.items : []).map((it) => ({
         ...it,
-        kdsStatus: it?.kdsStatus
-          ? String(it.kdsStatus).toUpperCase()
-          : "PENDING",
+        kdsStatus: it?.kdsStatus ? String(it.kdsStatus).toUpperCase() : "PENDING",
       }));
 
       // ✅ Enrich QR (add label even if order.qr.label is missing)
@@ -542,7 +574,7 @@ export const getKdsOverview = async (req, res) => {
       // ✅ station-filtered items (use safeItems, not o.items)
       const stationItems = filterItemsForStation(
         safeItems,
-        stationKey,
+        effectiveStationKey, // ✅ IMPORTANT: use effective key (ALL for view-only)
         isStationFiltered,
       );
 
@@ -607,8 +639,18 @@ export const getKdsOverview = async (req, res) => {
       },
 
       station: {
-        key: isStationFiltered ? stationKey : "ALL",
+        // show what user selected (SERVICE_STATION), but MAIN/ALL should display ALL
+        key:
+          requestedStationKey && requestedStationKey !== "MAIN"
+            ? requestedStationKey
+            : "ALL",
+
+        // filtered means whether we filtered items by station (effective)
         filtered: isStationFiltered,
+
+        // helpful flags for frontend
+        effectiveKey: effectiveStationKey, // "ALL" for view-only stations
+        viewOnly: isViewOnlyStation,       // true for service station
       },
 
       counts: {
@@ -632,6 +674,346 @@ export const getKdsOverview = async (req, res) => {
     return res.status(500).json({ error: err.message || "Server error" });
   }
 };
+
+
+// export const getKdsOverview = async (req, res) => {
+//   try {
+//     const branchId = String(req.query.branchId || "").trim();
+//     if (!branchId) return res.status(400).json({ error: "Missing branchId" });
+
+//     // ✅ allow station OR stationKey
+//     const stationRaw =
+//       String(req.query.stationKey || "").trim() ||
+//       String(req.query.station || "").trim();
+
+//     const stationKey = stationRaw ? stationRaw.toUpperCase() : "";
+//     const isStationFiltered =
+//       stationKey.length > 0 && stationKey !== "ALL" && stationKey !== "MAIN";
+
+//     const branch = await Branch.findOne({ branchId }).lean();
+//     if (!branch) return res.status(404).json({ error: "Branch not found" });
+
+//     // ✅ validate stationKey exists in branch (only if station filter is used)
+//     if (isStationFiltered) {
+//       const stations = Array.isArray(branch.stations)
+//         ? branch.stations
+//         : Array.isArray(branch.kdsStations)
+//           ? branch.kdsStations
+//           : [];
+
+//       const allowed = new Set(
+//         stations
+//           .filter((s) => s && s.isEnabled !== false)
+//           .map((s) => normStationKey(s.key))
+//           .filter(Boolean),
+//       );
+
+//       // Always allow MAIN as fallback
+//       allowed.add("MAIN");
+
+//       if (!allowed.has(stationKey)) {
+//         return res.status(400).json({
+//           error: "Invalid station",
+//           station: stationKey,
+//           allowed: Array.from(allowed),
+//         });
+//       }
+//     }
+
+//     const tz = String(branch.timeZone || req.query.tz || "Asia/Bahrain").trim();
+//     const openingHours = branch.openingHours || {};
+
+//     const { startTz, endTz, label } = resolveCurrentShiftWindow({
+//       openingHours,
+//       tz,
+//     });
+
+//     const fromUtc = startTz.toUTC().toJSDate();
+//     const toUtc = endTz.toUTC().toJSDate();
+
+//     const timeQuery = {
+//       $or: [
+//         { placedAt: { $gte: fromUtc, $lt: toUtc } },
+//         { createdAt: { $gte: fromUtc, $lt: toUtc } },
+//       ],
+//     };
+
+//     // ======================================================
+//     // ✅ HELP REQUESTS (CALL WAITER)
+//     // ======================================================
+//     const helpExpireCutoff = new Date(Date.now() - 30 * 60 * 1000);
+//     await HelpRequest.updateMany(
+//       {
+//         branchId,
+//         status: "OPEN",
+//         createdAt: { $lte: helpExpireCutoff },
+//       },
+//       { $set: { status: "EXPIRED" } },
+//     );
+
+//     const helpFindQuery = {
+//       branchId,
+//       status: "OPEN",
+//       createdAt: { $gte: fromUtc, $lt: toUtc },
+//     };
+
+//     // If you later add help.stationKey, you can filter here:
+//     // if (isStationFiltered) helpFindQuery.stationKey = stationKey;
+
+//     const helpRequests = await HelpRequest.find(helpFindQuery)
+//       .sort({ lastPingAt: -1 })
+//       .limit(100)
+//       .lean();
+
+//     // ======================================================
+//     // ✅ AUTO SERVE: READY -> SERVED after 60s
+//     // ======================================================
+//     const now = new Date();
+//     const cutoff = new Date(now.getTime() - 60 * 1000);
+
+//     await Order.updateMany(
+//       {
+//         branchId,
+//         ...timeQuery,
+//         status: "Ready",
+//         readyAt: { $exists: true, $lte: cutoff },
+//       },
+//       {
+//         $set: { status: "Served", servedAt: now },
+//       },
+//     );
+
+//     if (isStationFiltered) {
+//       const sk = stationKey; // already uppercase
+//       const toAutoServe = await Order.find({
+//         branchId,
+//         ...timeQuery,
+//         items: {
+//           $elemMatch: {
+//             kdsStatus: "READY",
+//             kdsStatusUpdatedAt: { $exists: true, $lte: cutoff },
+//             kdsStationKey: sk, // station-scoped auto-serve
+//           },
+//         },
+//       }).limit(300);
+
+//       for (const ord of toAutoServe) {
+//         let changed = 0;
+
+//         for (const it of ord.items || []) {
+//           const station = String(it?.kdsStationKey || "MAIN")
+//             .trim()
+//             .toUpperCase();
+//           if (station !== sk) continue;
+
+//           const code = String(it?.kdsStatus || "PENDING")
+//             .trim()
+//             .toUpperCase();
+//           const updatedAt = it?.kdsStatusUpdatedAt
+//             ? new Date(it.kdsStatusUpdatedAt)
+//             : null;
+
+//           if (code === "READY" && updatedAt && updatedAt <= cutoff) {
+//             it.kdsStatus = "SERVED";
+//             it.kdsStatusUpdatedAt = now;
+//             it.kdsStatusUpdatedBy = "AUTO_SERVE";
+//             changed++;
+//           }
+//         }
+
+//         if (changed > 0) {
+//           // Optional but recommended so devices refresh
+//           ord.revision = (ord.revision || 0) + 1;
+//           await ord.save();
+//         }
+//       }
+//     }
+
+//     const orders = await Order.find({
+//       branchId,
+//       ...timeQuery,
+//     })
+//       .sort({ createdAt: -1 })
+//       .limit(500)
+//       .lean();
+
+//     // ✅ Build qrMap from QR collection (qrId -> {label,type,number})
+//     const qrIds = [
+//       ...new Set(
+//         [
+//           ...orders.map((o) => o?.qr?.qrId),
+//           ...helpRequests.map((h) => h?.qr?.qrId),
+//         ]
+//           .filter(Boolean)
+//           .map(String),
+//       ),
+//     ];
+
+//     let qrMap = {};
+//     if (qrIds.length) {
+//       const qrs = await Qr.find(
+//         { qrId: { $in: qrIds } },
+//         { qrId: 1, label: 1, type: 1, number: 1 },
+//       ).lean();
+
+//       qrMap = qrs.reduce((acc, q) => {
+//         acc[String(q.qrId)] = q;
+//         return acc;
+//       }, {});
+//     }
+
+//     // ✅ Map help requests with enriched QR info
+//     const helpOpen = helpRequests.map((h) => {
+//       const q = h.qr || {};
+//       const qid = q?.qrId ? String(q.qrId) : "";
+//       const qrDoc = qid ? qrMap[qid] : null;
+
+//       const enrichedQr = {
+//         qrId: q.qrId ?? null,
+//         label: q.label ?? (qrDoc ? qrDoc.label : null),
+//         type: q.type ?? (qrDoc ? qrDoc.type : null),
+//         number: q.number ?? (qrDoc ? qrDoc.number : null),
+//       };
+
+//       return {
+//         id: String(h._id),
+//         vendorId: h.vendorId ?? null,
+//         branchId: h.branchId ?? null,
+//         qr: enrichedQr,
+//         message: h.message ?? null,
+//         status: h.status,
+//         pingCount: h.pingCount ?? 1,
+//         lastPingAt: h.lastPingAt ?? h.createdAt ?? null,
+//         createdAt: h.createdAt ?? null,
+//         // stationKey: h.stationKey ?? null, // if you add it later
+//       };
+//     });
+
+//     // ======================================================
+//     // ✅ Orders mapping (station-aware)
+//     // ======================================================
+//     const active = [];
+//     const completed = [];
+//     const cancelled = [];
+
+//     for (const o of orders) {
+//       const bucket = classifyStatus(o.status);
+
+//       // ✅ Backward compatibility: treat missing kdsStatus as PENDING (PER ORDER)
+//       const safeItems = (Array.isArray(o.items) ? o.items : []).map((it) => ({
+//         ...it,
+//         kdsStatus: it?.kdsStatus
+//           ? String(it.kdsStatus).toUpperCase()
+//           : "PENDING",
+//       }));
+
+//       // ✅ Enrich QR (add label even if order.qr.label is missing)
+//       const qr = o.qr || null;
+//       const qid = qr?.qrId ? String(qr.qrId) : "";
+//       const qrDoc = qid ? qrMap[qid] : null;
+
+//       const enrichedQr = qr
+//         ? {
+//             ...qr,
+//             label: qr.label ?? (qrDoc ? qrDoc.label : null),
+//             type: qr.type ?? (qrDoc ? qrDoc.type : null),
+//             number: qr.number ?? (qrDoc ? qrDoc.number : null),
+//           }
+//         : null;
+
+//       // ✅ station-filtered items (use safeItems, not o.items)
+//       const stationItems = filterItemsForStation(
+//         safeItems,
+//         stationKey,
+//         isStationFiltered,
+//       );
+
+//       // If station filter is enabled and this order has no items for that station, skip it.
+//       if (isStationFiltered && stationItems.length === 0) continue;
+
+//       // ✅ pricing: for station views, recompute totals from stationItems
+//       // NOTE: we don't mutate DB; we only mutate the response object.
+//       const pricingForResponse = (() => {
+//         if (!isStationFiltered) return o.pricing || null;
+//         const clone = {
+//           pricing: { ...(o.pricing || {}) },
+//           items: stationItems,
+//         };
+//         recomputeOrderPricing(clone);
+//         return clone.pricing;
+//       })();
+
+//       // ✅ stationSummary:
+//       // - ALL view: summary over ALL items (use safeItems so missing kdsStatus doesn't break)
+//       // - station view: summary over station items
+//       const stationSummaryForResponse = computeStationSummary(
+//         isStationFiltered ? stationItems : safeItems,
+//       );
+
+//       const mapped = {
+//         id: String(o._id),
+//         orderNumber: o.orderNumber,
+//         tokenNumber: o.tokenNumber ?? null,
+//         status: o.status || "Pending",
+//         branchId: o.branchId,
+//         currency: o.currency,
+
+//         pricing: pricingForResponse,
+
+//         qr: enrichedQr,
+//         customer: o.customer || null,
+
+//         // ✅ IMPORTANT: station view returns only station items
+//         items: stationItems,
+
+//         stationSummary: stationSummaryForResponse,
+
+//         placedAt: o.placedAt ?? null,
+//         createdAt: o.createdAt ?? null,
+//         updatedAt: o.updatedAt ?? null,
+//         readyAt: o.readyAt ?? null,
+//         servedAt: o.servedAt ?? null,
+//       };
+
+//       if (bucket === "active") active.push(mapped);
+//       else if (bucket === "completed") completed.push(mapped);
+//       else cancelled.push(mapped);
+//     }
+
+//     return res.status(200).json({
+//       shift: {
+//         tz,
+//         from: startTz.toISO(),
+//         to: endTz.toISO(),
+//         label,
+//       },
+
+//       station: {
+//         key: isStationFiltered ? stationKey : "ALL",
+//         filtered: isStationFiltered,
+//       },
+
+//       counts: {
+//         active: active.length,
+//         completed: completed.length,
+//         cancelled: cancelled.length,
+//         total: active.length + completed.length + cancelled.length,
+//       },
+
+//       help: {
+//         openCount: helpOpen.length,
+//         open: helpOpen,
+//       },
+
+//       active,
+//       completed,
+//       cancelled,
+//     });
+//   } catch (err) {
+//     console.error("getKdsOverview error:", err);
+//     return res.status(500).json({ error: err.message || "Server error" });
+//   }
+// };
 
 /**
  * PATCH /api/kds/orders/:id/status
@@ -1406,6 +1788,8 @@ export const getKdsStations = async (req, res) => {
           ? Number(s.sortOrder)
           : 0,
         hasPin: !!String(s.pinHash || "").trim(),
+          allowOrderModification: s.allowOrderModification !== false,
+
       }))
       .filter((s) => s.key)
       .sort((a, b) => a.sortOrder - b.sortOrder);
@@ -1464,6 +1848,8 @@ export const loginKdsStation = async (req, res) => {
           key: stationKey,
           nameEnglish: st.nameEnglish || "Main",
           nameArabic: st.nameArabic || "",
+            allowOrderModification: st.allowOrderModification !== false,
+
         },
       });
     }
@@ -1514,6 +1900,8 @@ export const loginKdsStation = async (req, res) => {
         key: stationKey,
         nameEnglish: st.nameEnglish || st.name || st.label || stationKey,
         nameArabic: st.nameArabic || "",
+          allowOrderModification: st.allowOrderModification !== false,
+
       },
     });
   } catch (err) {
