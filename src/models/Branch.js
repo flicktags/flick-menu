@@ -109,6 +109,7 @@ const branchSchema = new mongoose.Schema(
     // ✅ NEW: station-based KDS behavior toggle (default false)
     stationBased: { type: Boolean, default: false },
     callAssistance: {type: Boolean, default: false},
+    isDarkMode: {type: Boolean, default: false},
     customerInformation: {type: Boolean, default: false},
 
     serviceFeatures: [

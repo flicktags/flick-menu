@@ -91,6 +91,7 @@ export const registerBranch = async (req, res) => {
       // ✅ NEW
       stationBased,
       callAssistance,
+      isDarkMode,
       customerInformation,
     } = req.body;
 
@@ -147,7 +148,6 @@ export const registerBranch = async (req, res) => {
     const customizationObj = {
       isClassicMenu: false,
       isClassicMenuwithFullImage: false, // ✅ NEW
-
       // later you can add more keys here
     };
 
@@ -157,6 +157,9 @@ export const registerBranch = async (req, res) => {
 
     const callAssistanceBool =
       callAssistance !== undefined ? toBool(callAssistance) : false;
+
+    const isDarkModeBool =
+      isDarkMode !== undefined ? toBool(isDarkMode) : false;
 
     const customerInformationBool =
       customerInformation !== undefined ? toBool(customerInformation) : false;
@@ -174,6 +177,7 @@ export const registerBranch = async (req, res) => {
       // ✅ NEW
       stationBased: stationBasedBool,
       callAssistance: callAssistanceBool,
+      isDarkMode: isDarkModeBool,
       customerInformation: customerInformationBool,
 
       // serviceFeatures: if FE sends, allow only whitelisted keys
@@ -352,6 +356,10 @@ export const updateBranchInformation = async (req, res) => {
 
     if (b.callAssistance !== undefined) {
       branch.callAssistance = toBool(b.callAssistance);
+    }
+
+    if (b.isDarkMode !== undefined) {
+      branch.isDarkMode = toBool(b.isDarkMode);
     }
 
     if (b.customerInformation !== undefined) {
