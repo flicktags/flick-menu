@@ -685,8 +685,381 @@ export const getKdsOverview = async (req, res) => {
     return res.status(500).json({ error: err.message || "Server error" });
   }
 };
+
+
+// export const updateKdsOrderStatus = async (req, res) => {
+//   const session = await mongoose.startSession();
+
+//   try {
+//     const id = String(req.params.id || "").trim();
+//     const incoming = String(req.body?.status || "").trim();
+//     const branchId = String(
+//       req.body?.branchId || req.query.branchId || "",
+//     ).trim();
+
+//     const stationRaw =
+//       String(req.body?.stationKey || "").trim() ||
+//       String(req.query.stationKey || "").trim() ||
+//       String(req.query.station || "").trim();
+
+//     const stationKey = stationRaw ? stationRaw.toUpperCase() : "";
+//     const isStationScoped =
+//       stationKey && stationKey !== "ALL" && stationKey !== "MAIN";
+
+//     if (!mongoose.Types.ObjectId.isValid(id)) {
+//       return res.status(400).json({ error: "Invalid order id" });
+//     }
+//     if (!incoming) return res.status(400).json({ error: "Missing status" });
+
+//     const nextLabel = toLabel(incoming);
+//     if (!nextLabel) {
+//       return res.status(400).json({ error: "Invalid status value" });
+//     }
+//     const nextCode = toCode(nextLabel);
+
+//     const now = new Date();
+//     const userId = req.user?.uid || req.user?.email || req.user?.sub || null;
+
+//     // ------------------------------
+//     // helpers kept inside to avoid touching other code
+//     // ------------------------------
+//     const asInt = (v, fallback = 0) => {
+//       const n = Number(v);
+//       if (!Number.isFinite(n)) return fallback;
+//       return Math.trunc(n);
+//     };
+
+//     const nowPlusDays = (days) => {
+//       const d = new Date();
+//       d.setDate(d.getDate() + asInt(days, 0));
+//       return d;
+//     };
+
+//     // Debit ONE order from wallet with idempotency
+//     async function debitWalletOnceOnMainAccept({
+//       branchId,
+//       orderId,
+//       orderNumber,
+//       actorUserId,
+//     }) {
+//       const idemKey = `ORDER_DEBIT:${orderId}`;
+
+//       // idempotency check
+//       const already = await BillingLedger.findOne({
+//         idempotencyKey: idemKey,
+//       }).session(session);
+//       if (already) {
+//         return { reused: true, ledger: already, wallet: null };
+//       }
+
+//       // fee + vendor
+//       const { feeFils, vendorId } = await readBranchUnitFeeFils(
+//         branchId,
+//         session,
+//       );
+//       if (feeFils <= 0) {
+//         throw new Error("PLATFORM_FEE_NOT_SET");
+//       }
+
+//       const wallet = await BranchWalletAccount.findOne({ branchId }).session(
+//         session,
+//       );
+//       if (!wallet) throw new Error("WALLET_NOT_FOUND");
+
+//       // block if locked and grace expired
+//       if (wallet.orderingLocked === true) {
+//         if (!wallet.graceUntil || new Date() > new Date(wallet.graceUntil)) {
+//           throw new Error("ORDERING_LOCKED");
+//         }
+//       }
+
+//       // exhausted => lock and block
+//       if (
+//         (wallet.totalOrdersRemaining ??
+//           wallet.paidOrdersRemaining + wallet.bonusOrdersRemaining) <= 0
+//       ) {
+//         if (!wallet.exhaustedAt) wallet.exhaustedAt = new Date();
+//         wallet.graceUntil = nowPlusDays(wallet.graceDaysAfterExhausted || 2);
+//         wallet.orderingLocked = true;
+//         wallet.lockedAt = new Date();
+//         await wallet.save({ session });
+//         throw new Error("WALLET_EXHAUSTED");
+//       }
+
+//       const priority = wallet.consumePriority || "bonus_first";
+
+//       if (priority === "bonus_first") {
+//         if (wallet.bonusOrdersRemaining > 0) {
+//           wallet.bonusOrdersRemaining -= 1;
+//         } else if (wallet.paidOrdersRemaining > 0) {
+//           wallet.paidOrdersRemaining -= 1;
+//         } else {
+//           throw new Error("INSUFFICIENT_ORDERS");
+//         }
+//       } else {
+//         if (wallet.paidOrdersRemaining > 0) {
+//           wallet.paidOrdersRemaining -= 1;
+//         } else if (wallet.bonusOrdersRemaining > 0) {
+//           wallet.bonusOrdersRemaining -= 1;
+//         } else {
+//           throw new Error("INSUFFICIENT_ORDERS");
+//         }
+//       }
+
+//       // lock if now exhausted
+//       const totalAfter =
+//         wallet.totalOrdersRemaining ??
+//         wallet.paidOrdersRemaining + wallet.bonusOrdersRemaining;
+//       if (totalAfter <= 0) {
+//         wallet.exhaustedAt = new Date();
+//         wallet.graceUntil = nowPlusDays(wallet.graceDaysAfterExhausted || 2);
+//         wallet.orderingLocked = true;
+//         wallet.lockedAt = new Date();
+//       }
+
+//       await wallet.save({ session });
+
+//       const ledgerId = await generateLedgerId();
+
+//       const led = await BillingLedger.create(
+//         [
+//           {
+//             ledgerId,
+//             branchId,
+//             vendorId,
+//             actorUserId: actorUserId || "",
+//             actorRole: "system",
+//             entryType: "ORDER_DEBIT",
+//             direction: "DEBIT",
+//             amountFils: feeFils,
+//             currency: "BHD",
+//             unitFeeFils: feeFils,
+//             ordersDebited: 1,
+//             orderId,
+//             orderNumber: orderNumber || "",
+//             status: "succeeded",
+//             idempotencyKey: idemKey,
+//             payment: {
+//               provider: "",
+//               status: "",
+//               transactionId: "",
+//               merchantReference: "",
+//               authCode: "",
+//               resultCode: "",
+//               paidAt: null,
+//               raw: null,
+//             },
+//             snapshotAfter: {
+//               paidOrdersRemaining: wallet.paidOrdersRemaining,
+//               bonusOrdersRemaining: wallet.bonusOrdersRemaining,
+//               totalOrdersRemaining: wallet.totalOrdersRemaining,
+//             },
+//             title: "Order fee deducted on accept (MAIN)",
+//             note: `Deducted 1 order at fee=${feeFils} fils (priority=${priority})`,
+//           },
+//         ],
+//         { session },
+//       );
+
+//       return { reused: false, wallet, ledger: led[0] };
+//     }
+
+//     // ------------------------------
+//     // Transaction: update + maybe debit
+//     // ------------------------------
+//     let responsePayload = null;
+
+//     await session.withTransaction(async () => {
+//       const order = await Order.findById(id).session(session);
+//       if (!order) {
+//         responsePayload = { code: 404, body: { error: "Order not found" } };
+//         return;
+//       }
+
+//       if (branchId && String(order.branchId || "") !== branchId) {
+//         responsePayload = { code: 403, body: { error: "Branch mismatch" } };
+//         return;
+//       }
+
+//       // block terminal orders
+//       const curOrder = String(order.status || "").toLowerCase();
+//       if (
+//         ["completed", "cancelled", "canceled", "rejected"].includes(curOrder)
+//       ) {
+//         responsePayload = {
+//           code: 409,
+//           body: { error: "Order is terminal; cannot update" },
+//         };
+//         return;
+//       }
+
+//       // ✅ track BEFORE derived status (this is how we detect MAIN accept)
+//       const beforeDerivedLabel = deriveOrderStatusFromLines(order.items || []);
+//       const beforeDerivedCode = toCode(beforeDerivedLabel);
+
+//       // ✅ choose which lines this request can modify
+//       const allItems = Array.isArray(order.items) ? order.items : [];
+//       const targetItems = isStationScoped
+//         ? allItems.filter(
+//             (it) => normStationFromItem(it?.kdsStationKey) === stationKey,
+//           )
+//         : allItems;
+
+//       if (isStationScoped && targetItems.length === 0) {
+//         responsePayload = {
+//           code: 409,
+//           body: {
+//             error: "No items for this station in the order",
+//             stationKey,
+//           },
+//         };
+//         return;
+//       }
+
+//       // ✅ apply per-line transition
+//       let changedCount = 0;
+
+//       for (const it of targetItems) {
+//         const curLineCode = normLineStatus(it?.kdsStatus);
+//         const curLineLabel = toLabel(curLineCode) || "Pending";
+
+//         if (canTransition(curLineLabel, nextLabel)) {
+//           const before = normLineStatus(it.kdsStatus);
+//           it.kdsStatus = nextCode;
+//           it.kdsStatusUpdatedAt = now;
+//           it.kdsStatusUpdatedBy = userId;
+
+//           if (before !== nextCode) changedCount++;
+//         }
+//       }
+
+//       if (changedCount === 0) {
+//         responsePayload = {
+//           code: 409,
+//           body: {
+//             error:
+//               "No line items were updated (transition blocked or already same status)",
+//             stationKey: isStationScoped ? stationKey : "ALL",
+//             to: nextLabel,
+//           },
+//         };
+//         return;
+//       }
+
+//       // ✅ derive order.status from line statuses
+//       const derivedLabel = deriveOrderStatusFromLines(order.items || []);
+//       const derivedCode = toCode(derivedLabel);
+
+//       order.status = derivedLabel;
+
+//       if (derivedCode === "READY") {
+//         if (!order.readyAt) order.readyAt = now;
+//       }
+//       if (derivedCode === "SERVED") {
+//         if (!order.servedAt) order.servedAt = now;
+//       }
+
+//       // ✅ save order first (inside txn)
+//       await order.save({ session });
+
+//       // ======================================================
+//       // ✅ DEBIT ONLY WHEN MAIN ACCEPTS (GLOBAL) THE ORDER
+//       // Condition: global action + derived moves PENDING -> PREPARING
+//       // ======================================================
+//       const isMainGlobalAction = !isStationScoped; // stationKey missing/ALL/MAIN
+//       const isAcceptMoment =
+//         beforeDerivedCode === "PENDING" && derivedCode === "PREPARING";
+
+//       if (isMainGlobalAction && isAcceptMoment) {
+//         // debit once for the whole order
+//         await debitWalletOnceOnMainAccept({
+//           branchId: String(order.branchId || branchId || "").trim(),
+//           orderId: String(order._id),
+//           orderNumber: String(order.orderNumber || ""),
+//           actorUserId: userId,
+//         });
+//       }
+
+//       // keep SAME response shape you had before
+//       responsePayload = {
+//         code: 200,
+//         body: {
+//           message: "Line status updated",
+//           scope: isStationScoped ? { stationKey } : { stationKey: "ALL" },
+//           changedCount,
+//           order: {
+//             id: String(order._id),
+//             status: order.status,
+//             readyAt: order.readyAt ?? null,
+//             servedAt: order.servedAt ?? null,
+//             updatedAt: order.updatedAt ?? null,
+//             revision: order.revision ?? 0,
+//           },
+//         },
+//       };
+//     });
+
+//     if (!responsePayload) {
+//       return res.status(500).json({ error: "Server error" });
+//     }
+
+//     if (responsePayload.code === 200 && responsePayload.body?.order?.id) {
+//       try {
+//         const order = await Order.findById(
+//           responsePayload.body.order.id,
+//         ).lean();
+
+//         if (order) {
+//           await publishOrderFanout({
+//             branchId: order.branchId,
+//             eventName: "order.updated",
+//             payload: {
+//               type: "order.updated",
+//               updateType: "status",
+//               branchId: order.branchId,
+//               orderId: String(order._id),
+//               tokenNumber: order.tokenNumber ?? null,
+//               revision: order.revision ?? 0,
+//               status: order.status,
+//             },
+//             items: order.items || [],
+//           });
+//         }
+//       } catch (e) {
+//         console.error("Ably publish after updateKdsOrderStatus failed:", e);
+//       }
+//     }
+
+//     return res.status(responsePayload.code).json(responsePayload.body);
+//   } catch (err) {
+//     const msg = String(err?.message || err);
+
+//     // Keep it simple & predictable
+//     const map = {
+//       WALLET_NOT_FOUND: 403,
+//       ORDERING_LOCKED: 403,
+//       WALLET_EXHAUSTED: 403,
+//       PLATFORM_FEE_NOT_SET: 400,
+//       INSUFFICIENT_ORDERS: 403,
+//       BRANCH_NOT_FOUND: 404,
+//     };
+
+//     const code = map[msg] || 500;
+//     return res.status(code).json({ error: msg || "Server error" });
+//   } finally {
+//     session.endSession();
+//   }
+// };
 export const updateKdsOrderStatus = async (req, res) => {
   const session = await mongoose.startSession();
+
+  console.log("====================================================");
+  console.log("[KDS_BACKEND] updateKdsOrderStatus START");
+  console.log("[KDS_BACKEND] params.id      =", req.params.id);
+  console.log("[KDS_BACKEND] body           =", JSON.stringify(req.body || {}));
+  console.log("[KDS_BACKEND] query          =", JSON.stringify(req.query || {}));
+  console.log("[KDS_BACKEND] user           =", req.user?.uid || req.user?.email || req.user?.sub || null);
+  console.log("====================================================");
 
   try {
     const id = String(req.params.id || "").trim();
@@ -704,23 +1077,36 @@ export const updateKdsOrderStatus = async (req, res) => {
     const isStationScoped =
       stationKey && stationKey !== "ALL" && stationKey !== "MAIN";
 
+    console.log("[KDS_BACKEND] parsed id            =", id);
+    console.log("[KDS_BACKEND] parsed incoming      =", incoming);
+    console.log("[KDS_BACKEND] parsed branchId      =", branchId);
+    console.log("[KDS_BACKEND] parsed stationKey    =", stationKey);
+    console.log("[KDS_BACKEND] isStationScoped      =", isStationScoped);
+
     if (!mongoose.Types.ObjectId.isValid(id)) {
+      console.log("[KDS_BACKEND] invalid order id");
       return res.status(400).json({ error: "Invalid order id" });
     }
-    if (!incoming) return res.status(400).json({ error: "Missing status" });
+
+    if (!incoming) {
+      console.log("[KDS_BACKEND] missing status");
+      return res.status(400).json({ error: "Missing status" });
+    }
 
     const nextLabel = toLabel(incoming);
     if (!nextLabel) {
+      console.log("[KDS_BACKEND] invalid status value =", incoming);
       return res.status(400).json({ error: "Invalid status value" });
     }
+
     const nextCode = toCode(nextLabel);
+
+    console.log("[KDS_BACKEND] nextLabel           =", nextLabel);
+    console.log("[KDS_BACKEND] nextCode            =", nextCode);
 
     const now = new Date();
     const userId = req.user?.uid || req.user?.email || req.user?.sub || null;
 
-    // ------------------------------
-    // helpers kept inside to avoid touching other code
-    // ------------------------------
     const asInt = (v, fallback = 0) => {
       const n = Number(v);
       if (!Number.isFinite(n)) return fallback;
@@ -733,28 +1119,36 @@ export const updateKdsOrderStatus = async (req, res) => {
       return d;
     };
 
-    // Debit ONE order from wallet with idempotency
     async function debitWalletOnceOnMainAccept({
       branchId,
       orderId,
       orderNumber,
       actorUserId,
     }) {
+      console.log("[KDS_BACKEND][WALLET] debitWalletOnceOnMainAccept START");
+      console.log("[KDS_BACKEND][WALLET] branchId   =", branchId);
+      console.log("[KDS_BACKEND][WALLET] orderId    =", orderId);
+      console.log("[KDS_BACKEND][WALLET] orderNumber=", orderNumber);
+
       const idemKey = `ORDER_DEBIT:${orderId}`;
 
-      // idempotency check
       const already = await BillingLedger.findOne({
         idempotencyKey: idemKey,
       }).session(session);
+
       if (already) {
+        console.log("[KDS_BACKEND][WALLET] already debited, reuse");
         return { reused: true, ledger: already, wallet: null };
       }
 
-      // fee + vendor
       const { feeFils, vendorId } = await readBranchUnitFeeFils(
         branchId,
         session,
       );
+
+      console.log("[KDS_BACKEND][WALLET] feeFils    =", feeFils);
+      console.log("[KDS_BACKEND][WALLET] vendorId   =", vendorId);
+
       if (feeFils <= 0) {
         throw new Error("PLATFORM_FEE_NOT_SET");
       }
@@ -762,16 +1156,15 @@ export const updateKdsOrderStatus = async (req, res) => {
       const wallet = await BranchWalletAccount.findOne({ branchId }).session(
         session,
       );
+
       if (!wallet) throw new Error("WALLET_NOT_FOUND");
 
-      // block if locked and grace expired
       if (wallet.orderingLocked === true) {
         if (!wallet.graceUntil || new Date() > new Date(wallet.graceUntil)) {
           throw new Error("ORDERING_LOCKED");
         }
       }
 
-      // exhausted => lock and block
       if (
         (wallet.totalOrdersRemaining ??
           wallet.paidOrdersRemaining + wallet.bonusOrdersRemaining) <= 0
@@ -785,6 +1178,7 @@ export const updateKdsOrderStatus = async (req, res) => {
       }
 
       const priority = wallet.consumePriority || "bonus_first";
+      console.log("[KDS_BACKEND][WALLET] priority   =", priority);
 
       if (priority === "bonus_first") {
         if (wallet.bonusOrdersRemaining > 0) {
@@ -804,10 +1198,10 @@ export const updateKdsOrderStatus = async (req, res) => {
         }
       }
 
-      // lock if now exhausted
       const totalAfter =
         wallet.totalOrdersRemaining ??
         wallet.paidOrdersRemaining + wallet.bonusOrdersRemaining;
+
       if (totalAfter <= 0) {
         wallet.exhaustedAt = new Date();
         wallet.graceUntil = nowPlusDays(wallet.graceDaysAfterExhausted || 2);
@@ -818,6 +1212,7 @@ export const updateKdsOrderStatus = async (req, res) => {
       await wallet.save({ session });
 
       const ledgerId = await generateLedgerId();
+      console.log("[KDS_BACKEND][WALLET] ledgerId   =", ledgerId);
 
       const led = await BillingLedger.create(
         [
@@ -859,31 +1254,38 @@ export const updateKdsOrderStatus = async (req, res) => {
         { session },
       );
 
+      console.log("[KDS_BACKEND][WALLET] debitWalletOnceOnMainAccept SUCCESS");
       return { reused: false, wallet, ledger: led[0] };
     }
 
-    // ------------------------------
-    // Transaction: update + maybe debit
-    // ------------------------------
     let responsePayload = null;
 
     await session.withTransaction(async () => {
+      console.log("[KDS_BACKEND][TXN] transaction started");
+
       const order = await Order.findById(id).session(session);
+      console.log("[KDS_BACKEND][TXN] order found =", !!order);
+
       if (!order) {
         responsePayload = { code: 404, body: { error: "Order not found" } };
         return;
       }
 
+      console.log("[KDS_BACKEND][TXN] order.status before =", order.status);
+      console.log("[KDS_BACKEND][TXN] order.branchId      =", order.branchId);
+      console.log("[KDS_BACKEND][TXN] items count          =", Array.isArray(order.items) ? order.items.length : 0);
+
       if (branchId && String(order.branchId || "") !== branchId) {
+        console.log("[KDS_BACKEND][TXN] branch mismatch");
         responsePayload = { code: 403, body: { error: "Branch mismatch" } };
         return;
       }
 
-      // block terminal orders
       const curOrder = String(order.status || "").toLowerCase();
       if (
         ["completed", "cancelled", "canceled", "rejected"].includes(curOrder)
       ) {
+        console.log("[KDS_BACKEND][TXN] order terminal, blocked");
         responsePayload = {
           code: 409,
           body: { error: "Order is terminal; cannot update" },
@@ -891,17 +1293,20 @@ export const updateKdsOrderStatus = async (req, res) => {
         return;
       }
 
-      // ✅ track BEFORE derived status (this is how we detect MAIN accept)
       const beforeDerivedLabel = deriveOrderStatusFromLines(order.items || []);
       const beforeDerivedCode = toCode(beforeDerivedLabel);
 
-      // ✅ choose which lines this request can modify
+      console.log("[KDS_BACKEND][TXN] beforeDerivedLabel =", beforeDerivedLabel);
+      console.log("[KDS_BACKEND][TXN] beforeDerivedCode  =", beforeDerivedCode);
+
       const allItems = Array.isArray(order.items) ? order.items : [];
       const targetItems = isStationScoped
         ? allItems.filter(
             (it) => normStationFromItem(it?.kdsStationKey) === stationKey,
           )
         : allItems;
+
+      console.log("[KDS_BACKEND][TXN] targetItems length =", targetItems.length);
 
       if (isStationScoped && targetItems.length === 0) {
         responsePayload = {
@@ -914,14 +1319,22 @@ export const updateKdsOrderStatus = async (req, res) => {
         return;
       }
 
-      // ✅ apply per-line transition
       let changedCount = 0;
 
       for (const it of targetItems) {
         const curLineCode = normLineStatus(it?.kdsStatus);
         const curLineLabel = toLabel(curLineCode) || "Pending";
 
-        if (canTransition(curLineLabel, nextLabel)) {
+        console.log("[KDS_BACKEND][TXN][LINE] itemId         =", String(it?._id || ""));
+        console.log("[KDS_BACKEND][TXN][LINE] station        =", normStationFromItem(it?.kdsStationKey));
+        console.log("[KDS_BACKEND][TXN][LINE] curLineCode    =", curLineCode);
+        console.log("[KDS_BACKEND][TXN][LINE] curLineLabel   =", curLineLabel);
+        console.log("[KDS_BACKEND][TXN][LINE] nextLabel      =", nextLabel);
+
+        const allowed = canTransition(curLineLabel, nextLabel);
+        console.log("[KDS_BACKEND][TXN][LINE] canTransition  =", allowed);
+
+        if (allowed) {
           const before = normLineStatus(it.kdsStatus);
           it.kdsStatus = nextCode;
           it.kdsStatusUpdatedAt = now;
@@ -930,6 +1343,8 @@ export const updateKdsOrderStatus = async (req, res) => {
           if (before !== nextCode) changedCount++;
         }
       }
+
+      console.log("[KDS_BACKEND][TXN] changedCount =", changedCount);
 
       if (changedCount === 0) {
         responsePayload = {
@@ -944,9 +1359,11 @@ export const updateKdsOrderStatus = async (req, res) => {
         return;
       }
 
-      // ✅ derive order.status from line statuses
       const derivedLabel = deriveOrderStatusFromLines(order.items || []);
       const derivedCode = toCode(derivedLabel);
+
+      console.log("[KDS_BACKEND][TXN] derivedLabel after =", derivedLabel);
+      console.log("[KDS_BACKEND][TXN] derivedCode after  =", derivedCode);
 
       order.status = derivedLabel;
 
@@ -957,19 +1374,19 @@ export const updateKdsOrderStatus = async (req, res) => {
         if (!order.servedAt) order.servedAt = now;
       }
 
-      // ✅ save order first (inside txn)
+      console.log("[KDS_BACKEND][TXN] saving order...");
       await order.save({ session });
+      console.log("[KDS_BACKEND][TXN] order saved successfully");
 
-      // ======================================================
-      // ✅ DEBIT ONLY WHEN MAIN ACCEPTS (GLOBAL) THE ORDER
-      // Condition: global action + derived moves PENDING -> PREPARING
-      // ======================================================
-      const isMainGlobalAction = !isStationScoped; // stationKey missing/ALL/MAIN
+      const isMainGlobalAction = !isStationScoped;
       const isAcceptMoment =
         beforeDerivedCode === "PENDING" && derivedCode === "PREPARING";
 
+      console.log("[KDS_BACKEND][TXN] isMainGlobalAction =", isMainGlobalAction);
+      console.log("[KDS_BACKEND][TXN] isAcceptMoment     =", isAcceptMoment);
+
       if (isMainGlobalAction && isAcceptMoment) {
-        // debit once for the whole order
+        console.log("[KDS_BACKEND][TXN] debit wallet condition matched");
         await debitWalletOnceOnMainAccept({
           branchId: String(order.branchId || branchId || "").trim(),
           orderId: String(order._id),
@@ -978,7 +1395,6 @@ export const updateKdsOrderStatus = async (req, res) => {
         });
       }
 
-      // keep SAME response shape you had before
       responsePayload = {
         code: 200,
         body: {
@@ -995,14 +1411,20 @@ export const updateKdsOrderStatus = async (req, res) => {
           },
         },
       };
+
+      console.log("[KDS_BACKEND][TXN] responsePayload ready");
     });
 
+    console.log("[KDS_BACKEND] after transaction responsePayload =", JSON.stringify(responsePayload));
+
     if (!responsePayload) {
+      console.log("[KDS_BACKEND] responsePayload missing");
       return res.status(500).json({ error: "Server error" });
     }
 
     if (responsePayload.code === 200 && responsePayload.body?.order?.id) {
       try {
+        console.log("[KDS_BACKEND] publishOrderFanout START");
         const order = await Order.findById(
           responsePayload.body.order.id,
         ).lean();
@@ -1023,16 +1445,20 @@ export const updateKdsOrderStatus = async (req, res) => {
             items: order.items || [],
           });
         }
+        console.log("[KDS_BACKEND] publishOrderFanout SUCCESS");
       } catch (e) {
-        console.error("Ably publish after updateKdsOrderStatus failed:", e);
+        console.error("[KDS_BACKEND] publishOrderFanout FAILED:", e);
       }
     }
 
+    console.log("[KDS_BACKEND] returning success/error response", responsePayload.code);
     return res.status(responsePayload.code).json(responsePayload.body);
   } catch (err) {
+    console.error("[KDS_BACKEND] CATCH ERROR:", err);
+    console.error("[KDS_BACKEND] CATCH STACK:", err?.stack);
+
     const msg = String(err?.message || err);
 
-    // Keep it simple & predictable
     const map = {
       WALLET_NOT_FOUND: 403,
       ORDERING_LOCKED: 403,
@@ -1045,7 +1471,9 @@ export const updateKdsOrderStatus = async (req, res) => {
     const code = map[msg] || 500;
     return res.status(code).json({ error: msg || "Server error" });
   } finally {
-    session.endSession();
+    console.log("[KDS_BACKEND] session.endSession()");
+    await session.endSession();
+    console.log("[KDS_BACKEND] END");
   }
 };
 
