@@ -1051,7 +1051,7 @@ export const getKdsOverview = async (req, res) => {
 //   }
 // };
 export const updateKdsOrderStatus = async (req, res) => {
-  const session = await mongoose.startSession();
+  // const session = await mongoose.startSession();
 
   console.log("====================================================");
   console.log("[KDS_BACKEND] updateKdsOrderStatus START");
