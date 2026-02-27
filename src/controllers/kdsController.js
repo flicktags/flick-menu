@@ -1051,14 +1051,15 @@ export const getKdsOverview = async (req, res) => {
 //   }
 // };
 export const updateKdsOrderStatus = async (req, res) => {
-  // const session = await mongoose.startSession();
-
   console.log("====================================================");
   console.log("[KDS_BACKEND] updateKdsOrderStatus START");
   console.log("[KDS_BACKEND] params.id      =", req.params.id);
   console.log("[KDS_BACKEND] body           =", JSON.stringify(req.body || {}));
   console.log("[KDS_BACKEND] query          =", JSON.stringify(req.query || {}));
-  console.log("[KDS_BACKEND] user           =", req.user?.uid || req.user?.email || req.user?.sub || null);
+  console.log(
+    "[KDS_BACKEND] user           =",
+    req.user?.uid || req.user?.email || req.user?.sub || null,
+  );
   console.log("====================================================");
 
   try {
@@ -1134,17 +1135,14 @@ export const updateKdsOrderStatus = async (req, res) => {
 
       const already = await BillingLedger.findOne({
         idempotencyKey: idemKey,
-      }).session(session);
+      });
 
       if (already) {
         console.log("[KDS_BACKEND][WALLET] already debited, reuse");
         return { reused: true, ledger: already, wallet: null };
       }
 
-      const { feeFils, vendorId } = await readBranchUnitFeeFils(
-        branchId,
-        session,
-      );
+      const { feeFils, vendorId } = await readBranchUnitFeeFils(branchId);
 
       console.log("[KDS_BACKEND][WALLET] feeFils    =", feeFils);
       console.log("[KDS_BACKEND][WALLET] vendorId   =", vendorId);
@@ -1153,9 +1151,7 @@ export const updateKdsOrderStatus = async (req, res) => {
         throw new Error("PLATFORM_FEE_NOT_SET");
       }
 
-      const wallet = await BranchWalletAccount.findOne({ branchId }).session(
-        session,
-      );
+      const wallet = await BranchWalletAccount.findOne({ branchId });
 
       if (!wallet) throw new Error("WALLET_NOT_FOUND");
 
@@ -1173,7 +1169,7 @@ export const updateKdsOrderStatus = async (req, res) => {
         wallet.graceUntil = nowPlusDays(wallet.graceDaysAfterExhausted || 2);
         wallet.orderingLocked = true;
         wallet.lockedAt = new Date();
-        await wallet.save({ session });
+        await wallet.save();
         throw new Error("WALLET_EXHAUSTED");
       }
 
@@ -1209,50 +1205,47 @@ export const updateKdsOrderStatus = async (req, res) => {
         wallet.lockedAt = new Date();
       }
 
-      await wallet.save({ session });
+      await wallet.save();
 
       const ledgerId = await generateLedgerId();
       console.log("[KDS_BACKEND][WALLET] ledgerId   =", ledgerId);
 
-      const led = await BillingLedger.create(
-        [
-          {
-            ledgerId,
-            branchId,
-            vendorId,
-            actorUserId: actorUserId || "",
-            actorRole: "system",
-            entryType: "ORDER_DEBIT",
-            direction: "DEBIT",
-            amountFils: feeFils,
-            currency: "BHD",
-            unitFeeFils: feeFils,
-            ordersDebited: 1,
-            orderId,
-            orderNumber: orderNumber || "",
-            status: "succeeded",
-            idempotencyKey: idemKey,
-            payment: {
-              provider: "",
-              status: "",
-              transactionId: "",
-              merchantReference: "",
-              authCode: "",
-              resultCode: "",
-              paidAt: null,
-              raw: null,
-            },
-            snapshotAfter: {
-              paidOrdersRemaining: wallet.paidOrdersRemaining,
-              bonusOrdersRemaining: wallet.bonusOrdersRemaining,
-              totalOrdersRemaining: wallet.totalOrdersRemaining,
-            },
-            title: "Order fee deducted on accept (MAIN)",
-            note: `Deducted 1 order at fee=${feeFils} fils (priority=${priority})`,
+      const led = await BillingLedger.create([
+        {
+          ledgerId,
+          branchId,
+          vendorId,
+          actorUserId: actorUserId || "",
+          actorRole: "system",
+          entryType: "ORDER_DEBIT",
+          direction: "DEBIT",
+          amountFils: feeFils,
+          currency: "BHD",
+          unitFeeFils: feeFils,
+          ordersDebited: 1,
+          orderId,
+          orderNumber: orderNumber || "",
+          status: "succeeded",
+          idempotencyKey: idemKey,
+          payment: {
+            provider: "",
+            status: "",
+            transactionId: "",
+            merchantReference: "",
+            authCode: "",
+            resultCode: "",
+            paidAt: null,
+            raw: null,
           },
-        ],
-        { session },
-      );
+          snapshotAfter: {
+            paidOrdersRemaining: wallet.paidOrdersRemaining,
+            bonusOrdersRemaining: wallet.bonusOrdersRemaining,
+            totalOrdersRemaining: wallet.totalOrdersRemaining,
+          },
+          title: "Order fee deducted on accept (MAIN)",
+          note: `Deducted 1 order at fee=${feeFils} fils (priority=${priority})`,
+        },
+      ]);
 
       console.log("[KDS_BACKEND][WALLET] debitWalletOnceOnMainAccept SUCCESS");
       return { reused: false, wallet, ledger: led[0] };
@@ -1260,162 +1253,187 @@ export const updateKdsOrderStatus = async (req, res) => {
 
     let responsePayload = null;
 
-    await session.withTransaction(async () => {
-      console.log("[KDS_BACKEND][TXN] transaction started");
+    console.log("[KDS_BACKEND] non-transaction flow started");
 
-      const order = await Order.findById(id).session(session);
-      console.log("[KDS_BACKEND][TXN] order found =", !!order);
+    const order = await Order.findById(id);
+    console.log("[KDS_BACKEND] order found =", !!order);
 
-      if (!order) {
-        responsePayload = { code: 404, body: { error: "Order not found" } };
-        return;
-      }
-
-      console.log("[KDS_BACKEND][TXN] order.status before =", order.status);
-      console.log("[KDS_BACKEND][TXN] order.branchId      =", order.branchId);
-      console.log("[KDS_BACKEND][TXN] items count          =", Array.isArray(order.items) ? order.items.length : 0);
+    if (!order) {
+      responsePayload = { code: 404, body: { error: "Order not found" } };
+    } else {
+      console.log("[KDS_BACKEND] order.status before =", order.status);
+      console.log("[KDS_BACKEND] order.branchId      =", order.branchId);
+      console.log(
+        "[KDS_BACKEND] items count          =",
+        Array.isArray(order.items) ? order.items.length : 0,
+      );
 
       if (branchId && String(order.branchId || "") !== branchId) {
-        console.log("[KDS_BACKEND][TXN] branch mismatch");
+        console.log("[KDS_BACKEND] branch mismatch");
         responsePayload = { code: 403, body: { error: "Branch mismatch" } };
-        return;
-      }
+      } else {
+        const curOrder = String(order.status || "").toLowerCase();
+        if (
+          ["completed", "cancelled", "canceled", "rejected"].includes(curOrder)
+        ) {
+          console.log("[KDS_BACKEND] order terminal, blocked");
+          responsePayload = {
+            code: 409,
+            body: { error: "Order is terminal; cannot update" },
+          };
+        } else {
+          const beforeDerivedLabel = deriveOrderStatusFromLines(
+            order.items || [],
+          );
+          const beforeDerivedCode = toCode(beforeDerivedLabel);
 
-      const curOrder = String(order.status || "").toLowerCase();
-      if (
-        ["completed", "cancelled", "canceled", "rejected"].includes(curOrder)
-      ) {
-        console.log("[KDS_BACKEND][TXN] order terminal, blocked");
-        responsePayload = {
-          code: 409,
-          body: { error: "Order is terminal; cannot update" },
-        };
-        return;
-      }
+          console.log(
+            "[KDS_BACKEND] beforeDerivedLabel =",
+            beforeDerivedLabel,
+          );
+          console.log(
+            "[KDS_BACKEND] beforeDerivedCode  =",
+            beforeDerivedCode,
+          );
 
-      const beforeDerivedLabel = deriveOrderStatusFromLines(order.items || []);
-      const beforeDerivedCode = toCode(beforeDerivedLabel);
+          const allItems = Array.isArray(order.items) ? order.items : [];
+          const targetItems = isStationScoped
+            ? allItems.filter(
+                (it) => normStationFromItem(it?.kdsStationKey) === stationKey,
+              )
+            : allItems;
 
-      console.log("[KDS_BACKEND][TXN] beforeDerivedLabel =", beforeDerivedLabel);
-      console.log("[KDS_BACKEND][TXN] beforeDerivedCode  =", beforeDerivedCode);
+          console.log("[KDS_BACKEND] targetItems length =", targetItems.length);
 
-      const allItems = Array.isArray(order.items) ? order.items : [];
-      const targetItems = isStationScoped
-        ? allItems.filter(
-            (it) => normStationFromItem(it?.kdsStationKey) === stationKey,
-          )
-        : allItems;
+          if (isStationScoped && targetItems.length === 0) {
+            responsePayload = {
+              code: 409,
+              body: {
+                error: "No items for this station in the order",
+                stationKey,
+              },
+            };
+          } else {
+            let changedCount = 0;
 
-      console.log("[KDS_BACKEND][TXN] targetItems length =", targetItems.length);
+            for (const it of targetItems) {
+              const curLineCode = normLineStatus(it?.kdsStatus);
+              const curLineLabel = toLabel(curLineCode) || "Pending";
 
-      if (isStationScoped && targetItems.length === 0) {
-        responsePayload = {
-          code: 409,
-          body: {
-            error: "No items for this station in the order",
-            stationKey,
-          },
-        };
-        return;
-      }
+              console.log(
+                "[KDS_BACKEND][LINE] itemId         =",
+                String(it?._id || ""),
+              );
+              console.log(
+                "[KDS_BACKEND][LINE] station        =",
+                normStationFromItem(it?.kdsStationKey),
+              );
+              console.log(
+                "[KDS_BACKEND][LINE] curLineCode    =",
+                curLineCode,
+              );
+              console.log(
+                "[KDS_BACKEND][LINE] curLineLabel   =",
+                curLineLabel,
+              );
+              console.log("[KDS_BACKEND][LINE] nextLabel      =", nextLabel);
 
-      let changedCount = 0;
+              const allowed = canTransition(curLineLabel, nextLabel);
+              console.log("[KDS_BACKEND][LINE] canTransition  =", allowed);
 
-      for (const it of targetItems) {
-        const curLineCode = normLineStatus(it?.kdsStatus);
-        const curLineLabel = toLabel(curLineCode) || "Pending";
+              if (allowed) {
+                const before = normLineStatus(it.kdsStatus);
+                it.kdsStatus = nextCode;
+                it.kdsStatusUpdatedAt = now;
+                it.kdsStatusUpdatedBy = userId;
 
-        console.log("[KDS_BACKEND][TXN][LINE] itemId         =", String(it?._id || ""));
-        console.log("[KDS_BACKEND][TXN][LINE] station        =", normStationFromItem(it?.kdsStationKey));
-        console.log("[KDS_BACKEND][TXN][LINE] curLineCode    =", curLineCode);
-        console.log("[KDS_BACKEND][TXN][LINE] curLineLabel   =", curLineLabel);
-        console.log("[KDS_BACKEND][TXN][LINE] nextLabel      =", nextLabel);
+                if (before !== nextCode) changedCount++;
+              }
+            }
 
-        const allowed = canTransition(curLineLabel, nextLabel);
-        console.log("[KDS_BACKEND][TXN][LINE] canTransition  =", allowed);
+            console.log("[KDS_BACKEND] changedCount =", changedCount);
 
-        if (allowed) {
-          const before = normLineStatus(it.kdsStatus);
-          it.kdsStatus = nextCode;
-          it.kdsStatusUpdatedAt = now;
-          it.kdsStatusUpdatedBy = userId;
+            if (changedCount === 0) {
+              responsePayload = {
+                code: 409,
+                body: {
+                  error:
+                    "No line items were updated (transition blocked or already same status)",
+                  stationKey: isStationScoped ? stationKey : "ALL",
+                  to: nextLabel,
+                },
+              };
+            } else {
+              const derivedLabel = deriveOrderStatusFromLines(order.items || []);
+              const derivedCode = toCode(derivedLabel);
 
-          if (before !== nextCode) changedCount++;
+              console.log("[KDS_BACKEND] derivedLabel after =", derivedLabel);
+              console.log("[KDS_BACKEND] derivedCode after  =", derivedCode);
+
+              order.status = derivedLabel;
+
+              if (derivedCode === "READY") {
+                if (!order.readyAt) order.readyAt = now;
+              }
+              if (derivedCode === "SERVED") {
+                if (!order.servedAt) order.servedAt = now;
+              }
+
+              console.log("[KDS_BACKEND] saving order...");
+              await order.save();
+              console.log("[KDS_BACKEND] order saved successfully");
+
+              const isMainGlobalAction = !isStationScoped;
+              const isAcceptMoment =
+                beforeDerivedCode === "PENDING" && derivedCode === "PREPARING";
+
+              console.log(
+                "[KDS_BACKEND] isMainGlobalAction =",
+                isMainGlobalAction,
+              );
+              console.log(
+                "[KDS_BACKEND] isAcceptMoment     =",
+                isAcceptMoment,
+              );
+
+              if (isMainGlobalAction && isAcceptMoment) {
+                console.log("[KDS_BACKEND] debit wallet condition matched");
+                await debitWalletOnceOnMainAccept({
+                  branchId: String(order.branchId || branchId || "").trim(),
+                  orderId: String(order._id),
+                  orderNumber: String(order.orderNumber || ""),
+                  actorUserId: userId,
+                });
+              }
+
+              responsePayload = {
+                code: 200,
+                body: {
+                  message: "Line status updated",
+                  scope: isStationScoped ? { stationKey } : { stationKey: "ALL" },
+                  changedCount,
+                  order: {
+                    id: String(order._id),
+                    status: order.status,
+                    readyAt: order.readyAt ?? null,
+                    servedAt: order.servedAt ?? null,
+                    updatedAt: order.updatedAt ?? null,
+                    revision: order.revision ?? 0,
+                  },
+                },
+              };
+
+              console.log("[KDS_BACKEND] responsePayload ready");
+            }
+          }
         }
       }
+    }
 
-      console.log("[KDS_BACKEND][TXN] changedCount =", changedCount);
-
-      if (changedCount === 0) {
-        responsePayload = {
-          code: 409,
-          body: {
-            error:
-              "No line items were updated (transition blocked or already same status)",
-            stationKey: isStationScoped ? stationKey : "ALL",
-            to: nextLabel,
-          },
-        };
-        return;
-      }
-
-      const derivedLabel = deriveOrderStatusFromLines(order.items || []);
-      const derivedCode = toCode(derivedLabel);
-
-      console.log("[KDS_BACKEND][TXN] derivedLabel after =", derivedLabel);
-      console.log("[KDS_BACKEND][TXN] derivedCode after  =", derivedCode);
-
-      order.status = derivedLabel;
-
-      if (derivedCode === "READY") {
-        if (!order.readyAt) order.readyAt = now;
-      }
-      if (derivedCode === "SERVED") {
-        if (!order.servedAt) order.servedAt = now;
-      }
-
-      console.log("[KDS_BACKEND][TXN] saving order...");
-      await order.save({ session });
-      console.log("[KDS_BACKEND][TXN] order saved successfully");
-
-      const isMainGlobalAction = !isStationScoped;
-      const isAcceptMoment =
-        beforeDerivedCode === "PENDING" && derivedCode === "PREPARING";
-
-      console.log("[KDS_BACKEND][TXN] isMainGlobalAction =", isMainGlobalAction);
-      console.log("[KDS_BACKEND][TXN] isAcceptMoment     =", isAcceptMoment);
-
-      if (isMainGlobalAction && isAcceptMoment) {
-        console.log("[KDS_BACKEND][TXN] debit wallet condition matched");
-        await debitWalletOnceOnMainAccept({
-          branchId: String(order.branchId || branchId || "").trim(),
-          orderId: String(order._id),
-          orderNumber: String(order.orderNumber || ""),
-          actorUserId: userId,
-        });
-      }
-
-      responsePayload = {
-        code: 200,
-        body: {
-          message: "Line status updated",
-          scope: isStationScoped ? { stationKey } : { stationKey: "ALL" },
-          changedCount,
-          order: {
-            id: String(order._id),
-            status: order.status,
-            readyAt: order.readyAt ?? null,
-            servedAt: order.servedAt ?? null,
-            updatedAt: order.updatedAt ?? null,
-            revision: order.revision ?? 0,
-          },
-        },
-      };
-
-      console.log("[KDS_BACKEND][TXN] responsePayload ready");
-    });
-
-    console.log("[KDS_BACKEND] after transaction responsePayload =", JSON.stringify(responsePayload));
+    console.log(
+      "[KDS_BACKEND] after flow responsePayload =",
+      JSON.stringify(responsePayload),
+    );
 
     if (!responsePayload) {
       console.log("[KDS_BACKEND] responsePayload missing");
@@ -1425,33 +1443,38 @@ export const updateKdsOrderStatus = async (req, res) => {
     if (responsePayload.code === 200 && responsePayload.body?.order?.id) {
       try {
         console.log("[KDS_BACKEND] publishOrderFanout START");
-        const order = await Order.findById(
+
+        const freshOrder = await Order.findById(
           responsePayload.body.order.id,
         ).lean();
 
-        if (order) {
+        if (freshOrder) {
           await publishOrderFanout({
-            branchId: order.branchId,
+            branchId: freshOrder.branchId,
             eventName: "order.updated",
             payload: {
               type: "order.updated",
               updateType: "status",
-              branchId: order.branchId,
-              orderId: String(order._id),
-              tokenNumber: order.tokenNumber ?? null,
-              revision: order.revision ?? 0,
-              status: order.status,
+              branchId: freshOrder.branchId,
+              orderId: String(freshOrder._id),
+              tokenNumber: freshOrder.tokenNumber ?? null,
+              revision: freshOrder.revision ?? 0,
+              status: freshOrder.status,
             },
-            items: order.items || [],
+            items: freshOrder.items || [],
           });
         }
+
         console.log("[KDS_BACKEND] publishOrderFanout SUCCESS");
       } catch (e) {
         console.error("[KDS_BACKEND] publishOrderFanout FAILED:", e);
       }
     }
 
-    console.log("[KDS_BACKEND] returning success/error response", responsePayload.code);
+    console.log(
+      "[KDS_BACKEND] returning success/error response",
+      responsePayload.code,
+    );
     return res.status(responsePayload.code).json(responsePayload.body);
   } catch (err) {
     console.error("[KDS_BACKEND] CATCH ERROR:", err);
@@ -1471,8 +1494,6 @@ export const updateKdsOrderStatus = async (req, res) => {
     const code = map[msg] || 500;
     return res.status(code).json({ error: msg || "Server error" });
   } finally {
-    console.log("[KDS_BACKEND] session.endSession()");
-    await session.endSession();
     console.log("[KDS_BACKEND] END");
   }
 };
