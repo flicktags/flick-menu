@@ -20,6 +20,7 @@ import vendorStationRoutes from "./routes/vendorStationRoutes.js";
 // New redirect import
 import { publicBranchRedirect } from "./routes/publicRedirect.js";
 import walletRoutes from "./routes/walletRoutes.js";
+import realtimeRoutes from "./routes/realtimeRoutes.js";
 
 
 const app = express();
@@ -45,6 +46,7 @@ app.use("/api/dashboard", dashboardRoutes);
 app.use("/api/kds", kdsRoutes);
 app.use("/api", vendorStationRoutes);
 app.use("/api/wallet", walletRoutes);
+app.use("/api/realtime", realtimeRoutes);
 
 
 // --- Public branch redirect route ---

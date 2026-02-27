@@ -5,6 +5,7 @@ import Order from "../models/Order.js";
 import MenuItem from "../models/MenuItem.js";
 import crypto from "crypto";
 import { nextSeqByKey } from "../models/Counter.js";
+import { publishOrderFanout } from "../realtime/ablyPublisher.js";
 
 // ---------- helpers ----------
 function leftPad(value, size) {
@@ -191,7 +192,9 @@ function readPlatformFeeFromTaxes(taxes) {
 
   // stored as FILS (integer) e.g. 80
   const feeFilsRaw = taxes?.platformFeePerOrder;
-  const feeFils = Number.isFinite(Number(feeFilsRaw)) ? Math.max(0, Number(feeFilsRaw)) : 0;
+  const feeFils = Number.isFinite(Number(feeFilsRaw))
+    ? Math.max(0, Number(feeFilsRaw))
+    : 0;
 
   // convert to BHD for pricing math
   const feeBhd = feeFils / 1000;
@@ -207,7 +210,6 @@ function readPlatformFeeFromTaxes(taxes) {
     platformFeeAppliedBhd: appliedBhd,
   };
 }
-
 
 /**
  * Compute operational window for a "business day" based on openingHours for that weekday.
@@ -299,7 +301,6 @@ function resolveBusinessWindowForOrder({ orderDateUTC, tz, openingHours }) {
   };
 }
 
-
 export const createOrder = async (req, res) => {
   try {
     const {
@@ -334,7 +335,9 @@ export const createOrder = async (req, res) => {
     const showPlatformFee = taxes.showPlatformFee !== false; // default true
     const platformFeePaidByCustomer = taxes.platformFeePaidByCustomer === true; // default false
     const platformFeePerOrderFilsRaw = taxes.platformFeePerOrder ?? 0;
-    const platformFeePerOrderFils = Number.isFinite(Number(platformFeePerOrderFilsRaw))
+    const platformFeePerOrderFils = Number.isFinite(
+      Number(platformFeePerOrderFilsRaw),
+    )
       ? Math.max(0, Number(platformFeePerOrderFilsRaw))
       : 0;
     const platformFeePerOrderBhd = platformFeePerOrderFils / 1000; // ✅ FILS -> BHD
@@ -736,7 +739,19 @@ export const createOrder = async (req, res) => {
           orderNumber,
           tokenNumber,
         });
-
+        await publishOrderFanout({
+          branchId: created.branchId,
+          eventName: "order.created",
+          payload: {
+            type: "order.created",
+            branchId: created.branchId,
+            orderId: String(created._id),
+            tokenNumber: created.tokenNumber ?? null,
+            revision: created.revision ?? 0,
+            status: created.status,
+          },
+          items: created.items || [],
+        });
         return res.status(201).json({
           message: "Order placed",
           order: {
@@ -781,7 +796,6 @@ export const createOrder = async (req, res) => {
     return res.status(500).json({ error: err.message || "Server error" });
   }
 };
-
 
 // export const createOrder = async (req, res) => {
 //   try {
@@ -1360,8 +1374,7 @@ export const addItemsToPublicOrder = async (req, res) => {
 
     // ✅ platform fee settings (stored in FILS in branch.taxes)
     const showPlatformFee = taxes.showPlatformFee !== false; // default true
-    const platformFeePaidByCustomer =
-      taxes.platformFeePaidByCustomer === true; // default false
+    const platformFeePaidByCustomer = taxes.platformFeePaidByCustomer === true; // default false
     const platformFeePerOrderFilsRaw = taxes.platformFeePerOrder ?? 0;
     const platformFeePerOrderFils = Number.isFinite(
       Number(platformFeePerOrderFilsRaw),
@@ -1716,6 +1729,21 @@ export const addItemsToPublicOrder = async (req, res) => {
 
     await order.save();
 
+    await publishOrderFanout({
+  branchId: order.branchId,
+  eventName: "order.updated",
+  payload: {
+    type: "order.updated",
+    updateType: "amended",
+    branchId: order.branchId,
+    orderId: String(order._id),
+    tokenNumber: order.tokenNumber ?? null,
+    revision: order.revision ?? 0,
+    status: order.status,
+  },
+  items: order.items || [],
+});
+
     return res.status(200).json({
       message: "Items added",
       order: {
@@ -1795,7 +1823,6 @@ export const getPublicOrderById = async (req, res) => {
     return res.status(500).json({ error: err.message || "Server error" });
   }
 };
-
 
 // export const addItemsToPublicOrder = async (req, res) => {
 //   try {
